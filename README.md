@@ -1,3 +1,6 @@
+本项目100%代码由ai生成
+部分参考https://github.com/CyanTachyon/WindWhisper
+
 # SuenMeow
 
 SuenMeow 是一个面向 Discourse 论坛的事件驱动型人格 Bot 项目。它把“抓取论坛事件 → 让模型判断是否回复 → 生成回复草稿 → 按运行时安全策略决定发送、审批或仅演练 → 记录状态与流水”串成了一条可观测、可调试、可回滚的完整链路。
@@ -16,7 +19,6 @@ SuenMeow 是一个面向 Discourse 论坛的事件驱动型人格 Bot 项目。�
 > 当前**推荐默认部署方式**：`Docker Compose`。
 >
 > 本地 Python 直跑更适合开发和排障；如果你是第一次真正部署，优先走本文的 Docker 教程。
-
 ---
 
 ## 1. 它能做什么
