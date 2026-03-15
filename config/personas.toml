@@ -1,0 +1,6 @@
+enabled = ["core"]
+
+[priority]
+core = 100
+extra_1 = 50
+catgirl = 40

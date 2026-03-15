@@ -1,0 +1,32 @@
+[planner]
+[[planner.modules]]
+name = "core.md"
+enabled = true
+[[planner.modules]]
+name = "planner.md"
+enabled = true
+[[planner.modules]]
+name = "safety_rules.md"
+enabled = true
+
+[replyer]
+[[replyer.modules]]
+name = "core.md"
+enabled = true
+[[replyer.modules]]
+name = "replyer.md"
+enabled = true
+[[replyer.modules]]
+name = "style_rules.md"
+enabled = true
+[[replyer.modules]]
+name = "safety_rules.md"
+enabled = true
+
+[memory]
+[[memory.modules]]
+name = "memory_user_update.md"
+enabled = true
+[[memory.modules]]
+name = "memory_self_update.md"
+enabled = true
