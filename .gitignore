@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.sisyphus/
+*.egg-info/
+
+# Local runtime state
+data/
+logs/
+
+# Local secrets
+config/credentials.toml
+config/providers.toml
+.env
+
+# Windows oddities
+NUL
