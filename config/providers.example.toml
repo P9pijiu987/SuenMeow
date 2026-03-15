@@ -1,0 +1,4 @@
+[default]
+base_url = "https://api.example.com/v1/chat/completions"
+api_key = "your-api-key"
+timeout_seconds = 120
