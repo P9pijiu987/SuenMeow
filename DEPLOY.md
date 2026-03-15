@@ -1,105 +1,124 @@
-# SuenMeow Deployment Guide
+# SuenMeow 部署指南
 
-## 1. Deployment shape
+## 1. 部署形态
 
-SuenMeow runs as two long-lived processes:
+> 推荐主部署方式：**Docker Compose**。
+>
+> 直接使用 `python main.py ...` 仍然适合本地调试，但这个项目默认的运行形态是 `Web + Worker` 双服务 Compose 栈。
 
-- `suenmeow-web`: FastAPI admin UI and `/health` endpoint
-- `suenmeow-worker`: trigger engine, polling loop, and pipeline execution
+SuenMeow 以两个长期运行的进程工作：
 
-Both services use the same image and mount the same persistent directories:
+- `suenmeow-web`：FastAPI 管理端与 `/health` 健康检查接口
+- `suenmeow-worker`：触发引擎、轮询循环、Pipeline 执行
 
-- `config/` — TOML runtime configuration
-- `data/` — SQLite database (`data/suenmeow.sqlite3`)
-- `logs/` — rolling runtime logs (`logs/latest.log`)
+两个服务共用同一个镜像，并挂载同一组持久化目录：
 
-## 2. Environment layout
+- `config/` —— TOML 运行配置
+- `data/` —— SQLite 数据库（`data/suenmeow.sqlite3`）
+- `logs/` —— 运行日志（`logs/latest.log`）
 
-### Local / staging
+基础 Compose 栈还额外启用了：
 
-Use the base compose file:
+- `init: true`：改善信号处理与子进程回收
+- `stop_grace_period: 30s`：给 Worker 更平滑的停止窗口
+
+## 2. 环境布局
+
+### 本地 / 预发布环境
+
+直接使用基础 Compose 文件：
 
 ```bash
 docker compose up --build
 ```
 
-### Production-like
+### 类生产环境
 
-Use the production override so config is read-only inside the containers:
+如果你希望容器内的配置目录以只读方式挂载，请使用生产覆盖文件：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
-## 3. Configuration notes
+## 3. 配置说明
 
-- Default web bind host is `0.0.0.0` so the containerized web service is reachable through published ports.
-- External web port can be changed with `.env` / compose variable `SUENMEOW_WEB_PORT`.
-- Path overrides are supported through:
+- 默认 Web 绑定地址是 `0.0.0.0`，因此容器内的 Web 服务可以通过端口映射暴露出来。
+- 对外访问端口可以通过 `.env` / Compose 变量 `SUENMEOW_WEB_PORT` 调整。
+- 支持通过以下环境变量改写路径：
   - `SUENMEOW_CONFIG_DIR`
   - `SUENMEOW_DATA_DIR`
   - `SUENMEOW_LOG_DIR`
-- Relative override paths are resolved from the project root passed to `main.py --root`.
+- 如果这些路径写成相对路径，会相对于 `main.py --root` 传入的项目根目录解析。
 
-## 4. Health checks
+## 4. 健康检查
 
-- Container health is defined on `suenmeow-web`.
-- Compose probes `http://127.0.0.1:8000/health` from inside the container.
-- Expected response is HTTP `200` with JSON payload `{"status": "正常"}`.
+- 容器健康检查定义在 `suenmeow-web` 服务上。
+- Compose 会在容器内探测 `http://127.0.0.1:8000/health`。
+- 预期响应是 HTTP `200`，JSON 内容为 `{"status": "正常"}`。
 
-## 5. First startup checklist
+## 5. 首次启动检查清单
 
-1. Copy `.env.example` to `.env` if you need a different published port or path overrides.
-2. Review all files under `config/`.
-3. Confirm `config/runtime.toml` is still in a safe mode before first live connection:
+1. 如果你需要不同的对外端口或路径覆盖，先把 `.env.example` 复制为 `.env`。
+2. 检查 `config/` 下所有配置文件。
+3. 第一次连接真实论坛前，确认 `config/runtime.toml` 仍处于安全模式：
    - `read_only = true`
    - `allow_send_reply = false`
    - `require_approval_before_send = true`
-4. Start the stack.
-5. Open `http://localhost:${SUENMEOW_WEB_PORT:-8000}/health`.
-6. Confirm `logs/latest.log` appears.
-7. Confirm `data/suenmeow.sqlite3` appears.
+4. 启动整个栈。
+5. 打开 `http://localhost:${SUENMEOW_WEB_PORT:-8000}/health`。
+6. 确认 `logs/latest.log` 已生成。
+7. 确认 `data/suenmeow.sqlite3` 已生成。
 
-## 6. Restart / persistence validation
+## 6. 重启 / 持久化验证
 
-Use this minimal validation after upgrades or host restarts:
+升级、迁移或主机重启后，建议至少做一轮最小验证：
 
-1. `docker compose ps` shows both services running.
-2. `docker compose logs --tail=100 suenmeow-web suenmeow-worker` shows normal startup with no crash loop.
-3. `curl http://localhost:${SUENMEOW_WEB_PORT:-8000}/health` returns `{"status": "正常"}`.
-4. Stop the stack: `docker compose down`.
-5. Start it again.
-6. Verify all of the following still exist after restart:
+1. `docker compose ps` 能看到两个服务都在运行。
+2. `docker compose logs --tail=100 suenmeow-web suenmeow-worker` 看起来是正常启动，没有 crash loop。
+3. `curl http://localhost:${SUENMEOW_WEB_PORT:-8000}/health` 返回 `{"status": "正常"}`。
+4. 执行停止：`docker compose down`。
+5. 再重新启动。
+6. 启动后确认以下文件/目录仍然存在：
    - `config/`
    - `data/suenmeow.sqlite3`
    - `logs/latest.log`
-7. Re-open the admin UI and confirm recent pipeline/admin state is still present.
+7. 重新打开管理端，确认最近的流水、审批数据或管理状态仍然存在。
 
-## 7. Rolling config changes
+## 7. 滚动修改配置
 
-- Edit TOML under `config/` on the host.
-- Restart the affected service if the change is startup-only.
-- Runtime flags and several planner/threshold settings already hot-reload inside the worker, but deployment-level changes should still be treated conservatively.
+- 在宿主机上直接修改 `config/` 下的 TOML 文件。
+- 如果改动属于启动期配置，请重启受影响的服务。
+- 运行时开关、部分 Planner / 阈值配置已经支持热重载，但部署层面的修改仍建议保守处理。
 
-## 8. Rollback playbook
+对于 Web 服务，现在管理端已经可以直接：
 
-If a deployment is unhealthy:
+- 切换运行模式：`read-only`、`shadow`、`approval`、`direct-send`
+- 编辑非敏感 TOML 文件，例如：`runtime.toml`、`scheduler.toml`、`thresholds.toml`、`webui.toml`、`forum.toml`、`models.toml`、`personas.toml`、`prompt_modules.toml`
 
-1. Put the system back into a safe posture in `config/runtime.toml`:
+以下敏感文件仍然只允许在宿主机维护，故意不开放给 WebUI 编辑：
+
+- `config/credentials.toml`
+- `config/providers.toml`
+
+## 8. 回滚手册
+
+如果部署后状态异常，可以按下面步骤回滚：
+
+1. 先把系统切回安全姿态，在 `config/runtime.toml` 中设置：
    - `read_only = true`
    - `allow_send_reply = false`
-   - `panic_switch = true` if you need to freeze trigger processing quickly
-2. Restart containers with the last known good image / working tree.
-3. Bring the stack up again:
+   - 如需快速冻结触发处理，可设置 `panic_switch = true`
+2. 切回上一个已知可用的镜像或工作树。
+3. 再次启动整个栈：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
-4. Check `/health` and `docker compose logs`.
-5. Verify `data/suenmeow.sqlite3` and `logs/latest.log` are intact before re-enabling any send behavior.
+4. 检查 `/health` 与 `docker compose logs`。
+5. 在重新开启任何发送能力前，先确认 `data/suenmeow.sqlite3` 与 `logs/latest.log` 都完好无损。
 
-## 9. Current limitations
+## 9. 当前限制
 
-- Worker health is indirect; there is no dedicated worker HTTP health endpoint yet.
-- Production rollout still depends on the final verification wave (`F1`-`F4`) for end-to-end readiness review.
+- Worker 还没有单独的 HTTP 健康检查端点，目前只能通过间接方式观察。
+- 生产就绪性仍依赖最终收尾验证波次（`F1`–`F4`），所以现在更适合“先做一轮真实试部署”，而不是直接盲目长期上线。

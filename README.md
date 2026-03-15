@@ -7,11 +7,15 @@ SuenMeow 是一个面向 Discourse 论坛的事件驱动型人格 Bot 项目。�
 - 基于论坛通知、活跃度突增、定时扫描等来源触发处理
 - 基于提示词模块 + 人格模块组合生成回复
 - SQLite 持久化状态、事件、流水、待审批回复、记忆数据
-- FastAPI 管理端，支持查看运行状态、日志、流水、调试单话题、管理提示词/人格/记忆等
+- FastAPI 管理端，支持查看运行状态、日志、流水、调试单话题、管理提示词/人格/记忆，并直接切换运行模式、编辑非敏感 TOML 配置
 - 多层运行时安全开关：只读、影子模式、审批前发送、panic 开关、黑窗、主题冷却、静音主题、静音用户
 - Docker Compose 的 Web + Worker 双服务部署方式
 
 如果你只是想先跑起来，直接看下面的 **「小白开箱即用教程」** 即可。
+
+> 当前**推荐默认部署方式**：`Docker Compose`。
+>
+> 本地 Python 直跑更适合开发和排障；如果你是第一次真正部署，优先走本文的 Docker 教程。
 
 ---
 
@@ -123,6 +127,38 @@ SuenMeow 的典型流程如下：
 
 - **Web 服务**：提供管理端与健康检查
 - **Worker 服务**：真正干活，持续轮询并处理事件
+
+### 3.1 现在到底什么时候才会触发 Planner？
+
+很多人会误以为“只要扫到话题就会调用 Planner”，但当前实现不是这样。
+
+真实链路是：
+
+1. `NotificationWorker` / `ActivityWorker` / `HourlyScanWorker` 先生成触发事件
+2. 事件写入数据库时会先做去重
+3. `TriggerEngine.run_once()` 先检查全局运行时安全门：
+   - `panic_switch`
+   - 黑窗时间
+4. `TriggerEngine._process_pending_events()` 再做预算检查
+5. `Pipeline.process_event()` 再做每个话题级别的前置检查：
+   - panic / 黑窗
+   - 静音主题
+   - 主题冷却
+   - ban command
+6. **只有这些都通过后**，才会进入 `dry_run()`
+7. `dry_run()` 里面才真正调用 `planner.decide(...)`
+
+也就是说：
+
+- **不是看到话题就触发 Planner**
+- **而是事件创建、去重、全局门控、预算门控、Pipeline 前置安全检查全部通过后，才触发 Planner**
+
+Planner 跑完后，系统才会继续决定：
+
+- 跳过
+- 影子模式只演练
+- 进入审批
+- 直接发送
 
 ---
 
@@ -360,7 +396,44 @@ python main.py debug-topics --topic-id 123 --topic-id 456
 - 当前可用提示词文件 / 人格文件 / 模块文件
 - 当前提示词编排链路
 
-### 6.2 管理提示词
+### 6.2 直接切换运行模式（运行模式切换）
+
+现在首页已经支持直接切换四种核心运行模式：
+
+- `read-only`
+- `shadow`
+- `approval`
+- `direct-send`
+
+它们对应的含义分别是：
+
+- **read-only**：完全只读，禁止发送
+- **shadow**：生成草稿并记录流水，但不发送、也不进入待审批
+- **approval**：生成草稿并进入待审批列表，人工确认后发送
+- **direct-send**：满足条件时直接自动发送
+
+WebUI 切换模式时，会把对应状态写回 `config/runtime.toml`，并立即刷新当前 Web 进程内的配置引用。
+
+### 6.3 直接编辑非敏感配置（非敏感配置编辑）
+
+现在首页还支持直接编辑一部分**非敏感** TOML 配置文件，当前允许的范围包括：
+
+- `forum.toml`
+- `models.toml`
+- `personas.toml`
+- `prompt_modules.toml`
+- `runtime.toml`
+- `scheduler.toml`
+- `thresholds.toml`
+- `webui.toml`
+
+注意：
+
+- **账号密码不会出现在这里**
+- **API Key 也不会出现在这里**
+- `credentials.toml` / `providers.toml` 仍然需要你在宿主机本地手工维护
+
+### 6.4 管理提示词
 
 支持：
 
@@ -369,7 +442,7 @@ python main.py debug-topics --topic-id 123 --topic-id 456
 - 创建新的提示词文件
 - 更新已有提示词文件
 
-### 6.3 管理人格
+### 6.5 管理人格
 
 支持：
 
@@ -378,7 +451,7 @@ python main.py debug-topics --topic-id 123 --topic-id 456
 - 创建新人格文件
 - 更新已有人格文件
 
-### 6.4 管理记忆
+### 6.6 管理记忆
 
 支持：
 
@@ -386,7 +459,7 @@ python main.py debug-topics --topic-id 123 --topic-id 456
 - 查看/更新自我记忆
 - 更新某个用户的用户记忆
 
-### 6.5 看运行日志
+### 6.7 看运行日志
 
 支持：
 
@@ -395,7 +468,7 @@ python main.py debug-topics --topic-id 123 --topic-id 456
 
 默认日志文件是：`logs/latest.log`
 
-### 6.6 看事件与流水
+### 6.8 看事件与流水
 
 支持：
 
@@ -404,14 +477,14 @@ python main.py debug-topics --topic-id 123 --topic-id 456
 - 最近触发事件
 - 话题状态
 
-### 6.7 审批待发送回复
+### 6.9 审批待发送回复
 
 当启用“审批后发送”时，系统会把草稿放进待审批列表。你可以：
 
 - 查看待审批回复
 - 人工批准发送
 
-### 6.8 调试单个话题
+### 6.10 调试单个话题
 
 这是很实用的功能。你可以查看某个话题在当前配置下：
 
@@ -582,7 +655,7 @@ python main.py worker
 
 ## 8. Docker 开箱即用教程
 
-如果你不想手动开两个终端，直接用 Docker。
+这是当前**最推荐**的部署方式。如果你不是在做本地开发，而是想稳定跑起来，优先用 Docker。
 
 ### 8.1 先准备 `.env`
 
@@ -612,6 +685,14 @@ docker compose up --build
 - `suenmeow-web`
 - `suenmeow-worker`
 
+它们会共享：
+
+- `config/`
+- `data/`
+- `logs/`
+
+因此你通过 WebUI 修改的**非敏感配置**、运行产生的数据库、日志文件，都会保留在宿主机目录中。
+
 ### 8.3 验证启动成功
 
 检查：
@@ -632,6 +713,11 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 - 配置目录会只读挂载
 - 环境标记为 production
 - 更接近正式部署
+
+另外，Compose 当前还启用了：
+
+- `init: true`，减少容器内僵尸进程/信号处理问题
+- `stop_grace_period: 30s`，给 Worker 留出更稳妥的退出时间
 
 更详细的部署、重启验证、回滚步骤请看：
 

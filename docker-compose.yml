@@ -2,7 +2,9 @@ name: suenmeow
 
 x-suenmeow-common: &suenmeow-common
   build: .
+  init: true
   restart: unless-stopped
+  stop_grace_period: 30s
   volumes:
     - ./config:/app/config
     - ./data:/app/data

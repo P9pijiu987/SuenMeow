@@ -16,6 +16,8 @@ def test_base_compose_defines_web_and_worker_services() -> None:
 
     assert "suenmeow-web:" in compose
     assert "suenmeow-worker:" in compose
+    assert "init: true" in compose
+    assert "stop_grace_period: 30s" in compose
     assert 'command: ["python", "main.py", "web", "--root", "/app"]' in compose
     assert 'command: ["python", "main.py", "worker", "--root", "/app"]' in compose
     assert '- "${SUENMEOW_WEB_PORT:-8000}:8000"' in compose
@@ -40,8 +42,8 @@ def test_webui_default_host_is_container_friendly() -> None:
 def test_deploy_docs_cover_restart_validation_and_rollback() -> None:
     deploy = (ROOT / "DEPLOY.md").read_text(encoding="utf-8")
 
-    assert "Restart / persistence validation" in deploy
-    assert "Rollback playbook" in deploy
+    assert "重启 / 持久化验证" in deploy
+    assert "回滚手册" in deploy
     assert "docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build" in deploy
 
 
@@ -51,3 +53,20 @@ def test_deploy_docs_cover_persistent_state_artifacts() -> None:
     assert "data/suenmeow.sqlite3" in deploy
     assert "logs/latest.log" in deploy
     assert "config/" in deploy
+
+
+def test_docs_describe_docker_as_primary_and_webui_config_controls() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    deploy = (ROOT / "DEPLOY.md").read_text(encoding="utf-8")
+
+    assert "推荐默认部署方式" in readme
+    assert "Docker Compose" in readme
+    assert "运行模式切换" in readme
+    assert "非敏感配置编辑" in readme
+    assert "什么时候才会触发 Planner" in readme
+
+    assert "推荐主部署方式" in deploy
+    assert "read-only" in deploy
+    assert "direct-send" in deploy
+    assert "config/credentials.toml" in deploy
+    assert "config/providers.toml" in deploy
