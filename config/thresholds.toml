@@ -1,0 +1,14 @@
+[triggers]
+hourly_new_reply_min = 2
+hourly_hot_reply_min = 10
+burst_window_minutes = 5
+burst_reply_min = 5
+
+[context]
+planner_max_posts = 120
+replyer_max_posts = 60
+summary_max_chars = 12000
+
+[budget]
+daily_token_budget = 800000
+topic_token_budget = 30000
