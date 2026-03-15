@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
 
+from bot.approval_service import ApprovalService
 from web.main import create_app
 
 
@@ -239,7 +240,18 @@ def test_config_prompt_modules_support_read_and_update(tmp_path: Path) -> None:
             {"name": "memory_user_update.md", "enabled": True},
             {"name": "memory_self_update.md", "enabled": True},
         ]
+        assert data["editable_configs"] == [
+            "forum.toml",
+            "models.toml",
+            "personas.toml",
+            "prompt_modules.toml",
+            "runtime.toml",
+            "scheduler.toml",
+            "thresholds.toml",
+            "webui.toml",
+        ]
         assert data["runtime"] == {
+            "mode": "read-only",
             "read_only": True,
             "mark_notifications_read": False,
             "shadow_mode": False,
@@ -327,6 +339,108 @@ def test_config_prompt_modules_support_read_and_update(tmp_path: Path) -> None:
     )
 
 
+def test_config_editable_route_reads_and_updates_non_sensitive_config(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path)
+
+    with TestClient(app) as client:
+        fetched = client.get("/config/editable/webui.toml")
+        assert fetched.status_code == 200
+        assert fetched.json()["file"] == "webui.toml"
+        assert "host='127.0.0.1'" in fetched.json()["content"]
+
+        updated = client.put(
+            "/config/editable/webui.toml",
+            json={
+                "content": "host='0.0.0.0'\nport=9001\nenable_auth=false\nshow_aigc_logs=true\n"
+            },
+        )
+        assert updated.status_code == 200
+        assert updated.json()["file"] == "webui.toml"
+        assert "host='0.0.0.0'" in updated.json()["content"]
+
+    assert (tmp_path / "config" / "webui.toml").read_text(encoding="utf-8") == (
+        "host='0.0.0.0'\nport=9001\nenable_auth=false\nshow_aigc_logs=true\n"
+    )
+    assert app.state.settings.webui.host == "0.0.0.0"
+    assert app.state.settings.webui.port == 9001
+
+
+def test_config_editable_route_rejects_sensitive_or_pathlike_names(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path)
+
+    with TestClient(app) as client:
+        sensitive = client.get("/config/editable/providers.toml")
+        assert sensitive.status_code == 400
+        assert sensitive.json()["detail"] == "Config file is not editable from WebUI: providers.toml"
+
+        pathlike = client.get("/config/editable/..%5Cruntime.toml")
+        assert pathlike.status_code == 400
+        assert pathlike.json()["detail"] == "Invalid config filename: ..\\runtime.toml"
+
+
+def test_runtime_mode_route_updates_runtime_and_refreshes_approval_service(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path)
+    database = app.state.database
+    pending_reply_id = database.create_pending_reply(
+        topic_id=9,
+        topic_title="runtime topic",
+        trigger_reason="notification",
+        target_post_number=5,
+        draft_content="mrrp",
+        decision={"should_reply": True, "reason": "ok"},
+    )
+
+    calls: list[dict[str, object]] = []
+
+    async def fake_send(topic_id: int, raw: str, reply_to_post_number: int | None) -> dict[str, object]:
+        calls.append(
+            {
+                "topic_id": topic_id,
+                "raw": raw,
+                "reply_to_post_number": reply_to_post_number,
+            }
+        )
+        return {"id": 901}
+
+    app.state.approval_service = ApprovalService(app.state.database, app.state.settings, send_reply=fake_send)
+
+    with TestClient(app) as client:
+        switched = client.put("/config/runtime-mode", json={"mode": "direct-send"})
+        assert switched.status_code == 200
+        runtime = switched.json()["runtime"]
+        assert runtime["mode"] == "direct-send"
+        assert runtime["read_only"] is False
+        assert runtime["shadow_mode"] is False
+        assert runtime["allow_send_reply"] is True
+        assert runtime["require_approval_before_send"] is False
+
+        approved = client.post(f"/topics/pending-replies/{pending_reply_id}/approve")
+        assert approved.status_code == 200
+        assert approved.json()["status"] == "sent"
+        assert approved.json()["reply_post_id"] == 901
+
+    assert len(calls) == 1
+    assert calls[0]["topic_id"] == 9
+    assert app.state.settings.runtime.allow_send_reply is True
+    assert app.state.settings.runtime.require_approval_before_send is False
+    assert app.state.approval_service.settings.runtime.allow_send_reply is True
+    assert app.state.approval_service.settings.runtime.require_approval_before_send is False
+
+
+def test_runtime_mode_route_rejects_unsupported_mode(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.put("/config/runtime-mode", json={"mode": "turbo"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "不支持的运行模式: turbo"
+
+
 def test_config_prompt_modules_rejects_empty_route(tmp_path: Path) -> None:
     _write_config(tmp_path)
     app = create_app(tmp_path)
@@ -387,8 +501,13 @@ def test_homepage_renders_real_chinese_admin_page(tmp_path: Path) -> None:
     assert "流水线追踪" in text
     assert "待审核回复" in text
     assert "运行状态 (Runtime Status)" in text
+    assert "运行模式切换 (Runtime Modes)" in text
+    assert "非敏感配置编辑 (Config Editor)" in text
     assert "runtime-status-badges" in text
     assert "hydrateRuntimeStatus" in text
+    assert "saveRuntimeMode()" in text
+    assert "loadEditableConfig()" in text
+    assert "saveEditableConfig()" in text
     assert "只读模式" in text
     assert "可发送" in text
     assert "需审批" in text
@@ -401,6 +520,8 @@ def test_homepage_renders_real_chinese_admin_page(tmp_path: Path) -> None:
     assert "planner.md" in text
     assert "catgirl.md" in text
     assert "/config/prompt-modules" in text
+    assert "/config/runtime-mode" in text
+    assert "/config/editable/" in text
     assert "core.md" in text
     assert "/memory/user/" in text
     assert "/logs/latest?lines=200" in text

@@ -6,12 +6,17 @@ from fastapi import APIRouter, Request
 from fastapi import HTTPException
 from pydantic import BaseModel
 
+from bot.settings import editable_config_filenames
+from bot.settings import runtime_mode_name
+from bot.settings import Settings
 from bot.settings import PromptModuleEntry
 from bot.settings import PromptModulesConfig
 from bot.settings import PromptRouteConfig
 from bot.settings import load_settings
 from bot.settings import prompt_modules_to_dict
+from bot.settings import save_editable_config_text
 from bot.settings import save_prompt_modules
+from bot.settings import validate_editable_config_filename
 from bot.settings import validate_prompt_modules_config
 
 
@@ -31,6 +36,14 @@ class PromptModulesPayload(BaseModel):
     planner: PromptRoutePayload
     replyer: PromptRoutePayload
     memory: PromptRoutePayload
+
+
+class RuntimeModePayload(BaseModel):
+    mode: str
+
+
+class ConfigTextPayload(BaseModel):
+    content: str
 
 
 def _available_prompt_files(request: Request) -> list[str]:
@@ -77,7 +90,9 @@ def _config_response(request: Request) -> dict[str, object]:
     return {
         "forum_base_url": settings.forum.base_url,
         "models": {name: route.model for name, route in settings.models.items()},
+        "editable_configs": editable_config_filenames(),
         "runtime": {
+            "mode": runtime_mode_name(settings.runtime),
             "read_only": settings.runtime.read_only,
             "mark_notifications_read": settings.runtime.mark_notifications_read,
             "shadow_mode": settings.runtime.shadow_mode,
@@ -105,6 +120,48 @@ def _config_response(request: Request) -> dict[str, object]:
     }
 
 
+def _apply_web_settings(request: Request, settings: Settings) -> None:
+    request.app.state.settings = settings
+    request.app.state.approval_service.settings = settings
+
+
+def _reload_web_settings(request: Request) -> None:
+    _apply_web_settings(request, load_settings(request.app.state.paths))
+
+
+def _runtime_mode_state(mode: str) -> dict[str, bool]:
+    normalized = mode.strip().lower()
+    mapping = {
+        "read-only": {
+            "read_only": True,
+            "shadow_mode": False,
+            "allow_send_reply": False,
+            "require_approval_before_send": True,
+        },
+        "shadow": {
+            "read_only": False,
+            "shadow_mode": True,
+            "allow_send_reply": True,
+            "require_approval_before_send": True,
+        },
+        "approval": {
+            "read_only": False,
+            "shadow_mode": False,
+            "allow_send_reply": True,
+            "require_approval_before_send": True,
+        },
+        "direct-send": {
+            "read_only": False,
+            "shadow_mode": False,
+            "allow_send_reply": True,
+            "require_approval_before_send": False,
+        },
+    }
+    if normalized not in mapping:
+        raise HTTPException(status_code=400, detail=f"不支持的运行模式: {mode}")
+    return mapping[normalized]
+
+
 @router.get("", summary="查看当前配置")
 def get_config(request: Request) -> dict[str, object]:
     return _config_response(request)
@@ -121,7 +178,66 @@ def update_prompt_modules(payload: PromptModulesPayload, request: Request) -> di
     try:
         validate_prompt_modules_config(request.app.state.paths, prompt_modules)
         save_prompt_modules(request.app.state.paths, prompt_modules)
-        request.app.state.settings = load_settings(request.app.state.paths)
+        _reload_web_settings(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _config_response(request)
+
+
+@router.get("/editable/{filename}", summary="读取可编辑配置文件")
+def get_editable_config(filename: str, request: Request) -> dict[str, object]:
+    try:
+        safe_name = validate_editable_config_filename(filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    target = request.app.state.paths.config_dir / safe_name
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"配置文件不存在: {safe_name}")
+    return {"file": safe_name, "content": target.read_text(encoding="utf-8")}
+
+
+@router.put("/editable/{filename}", summary="更新非敏感配置文件")
+def update_editable_config(filename: str, payload: ConfigTextPayload, request: Request) -> dict[str, object]:
+    try:
+        safe_name = validate_editable_config_filename(filename)
+        updated_settings = save_editable_config_text(request.app.state.paths, safe_name, payload.content)
+        _apply_web_settings(request, updated_settings)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    target = request.app.state.paths.config_dir / safe_name
+    return {"file": safe_name, "content": target.read_text(encoding="utf-8")}
+
+
+@router.put("/runtime-mode", summary="切换运行模式")
+def update_runtime_mode(payload: RuntimeModePayload, request: Request) -> dict[str, object]:
+    settings = request.app.state.settings
+    runtime_lines = [
+        f"read_only = {'true' if settings.runtime.read_only else 'false'}",
+        f"mark_notifications_read = {'true' if settings.runtime.mark_notifications_read else 'false'}",
+        f"shadow_mode = {'true' if settings.runtime.shadow_mode else 'false'}",
+        f"allow_send_reply = {'true' if settings.runtime.allow_send_reply else 'false'}",
+        f"require_approval_before_send = {'true' if settings.runtime.require_approval_before_send else 'false'}",
+        f"panic_switch = {'true' if settings.runtime.panic_switch else 'false'}",
+        f"topic_cooldown_minutes = {settings.runtime.topic_cooldown_minutes}",
+    ]
+    if settings.runtime.blackout_start_hour is not None:
+        runtime_lines.append(f"blackout_start_hour = {settings.runtime.blackout_start_hour}")
+    if settings.runtime.blackout_end_hour is not None:
+        runtime_lines.append(f"blackout_end_hour = {settings.runtime.blackout_end_hour}")
+    runtime_lines.append(f"muted_topic_ids = {settings.runtime.muted_topic_ids}")
+    runtime_lines.append(f"muted_usernames = {settings.runtime.muted_usernames}")
+
+    overrides = _runtime_mode_state(payload.mode)
+    rewritten: list[str] = []
+    for line in runtime_lines:
+        key = line.split("=", 1)[0].strip()
+        if key in overrides:
+            rewritten.append(f"{key} = {'true' if overrides[key] else 'false'}")
+        else:
+            rewritten.append(line)
+    try:
+        updated_settings = save_editable_config_text(request.app.state.paths, "runtime.toml", "\n".join(rewritten) + "\n")
+        _apply_web_settings(request, updated_settings)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _config_response(request)

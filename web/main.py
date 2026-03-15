@@ -44,6 +44,19 @@ def create_app(root: Path) -> FastAPI:
         prompt_dir = paths.root / "prompts"
         persona_dir = paths.root / "personas"
         prompt_modules_hint = "支持把 prompts 与 personas（如 core.md、catgirl.md）一起编排到 planner / replyer / memory 链路中。"
+        editable_config_options = "".join(
+            f'<option value="{name}">{name}</option>'
+            for name in (
+                "forum.toml",
+                "models.toml",
+                "personas.toml",
+                "prompt_modules.toml",
+                "runtime.toml",
+                "scheduler.toml",
+                "thresholds.toml",
+                "webui.toml",
+            )
+        )
         runtime_badges: list[str] = []
         if settings.runtime.read_only:
             runtime_badges.append(
@@ -211,6 +224,42 @@ def create_app(root: Path) -> FastAPI:
       </div>
       <div>
         <a href="/config" target="_blank" style="font-size: 13px; color: var(--primary); text-decoration: none;">查看完整配置</a>
+      </div>
+    </section>
+
+    <section class="card col-span-6">
+      <div class="card-header"><h2>🎛️ 运行模式切换 (Runtime Modes)</h2></div>
+      <p class="section-note">安全模式优先：只允许切换非敏感运行时策略，不在 WebUI 明文编辑密钥和账密。</p>
+      <label for="runtime-mode-select">选择运行模式</label>
+      <select id="runtime-mode-select">
+        <option value="read-only">只读模式</option>
+        <option value="shadow">影子模式</option>
+        <option value="approval">审批模式</option>
+        <option value="direct-send">直接发送模式</option>
+      </select>
+      <div style="margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.7;">
+        <div>只读：不发送，只观察</div>
+        <div>影子：生成草稿并记流水，但不发送、不进审批</div>
+        <div>审批：生成草稿并进入待审批列表</div>
+        <div>直接发送：满足条件时直接发送</div>
+      </div>
+      <div class="btn-group">
+        <button type="button" onclick="saveRuntimeMode()">💾 保存运行模式</button>
+        <div id="runtime-mode-status" class="status"></div>
+      </div>
+    </section>
+
+    <section class="card col-span-6">
+      <div class="card-header"><h2>🧾 非敏感配置编辑 (Config Editor)</h2></div>
+      <p class="section-note">这里只开放非敏感 TOML：runtime / webui / scheduler / thresholds / forum / models / personas / prompt modules。账号密码与 API key 不可在这里直接编辑。</p>
+      <label for="editable-config-file">选择配置文件</label>
+      <select id="editable-config-file">{editable_config_options}</select>
+      <label for="editable-config-content">配置内容</label>
+      <textarea id="editable-config-content" placeholder="载入中..."></textarea>
+      <div class="btn-group">
+        <button class="secondary" type="button" onclick="loadEditableConfig()">🔄 重新载入</button>
+        <button type="button" onclick="saveEditableConfig()">💾 保存配置</button>
+        <div id="editable-config-status" class="status"></div>
       </div>
     </section>
 
@@ -642,6 +691,10 @@ def create_app(root: Path) -> FastAPI:
     function hydrateRuntimeStatus(runtime) {{
       if (!runtime) return;
       const badges = document.getElementById('runtime-status-badges');
+      const modeSelect = document.getElementById('runtime-mode-select');
+      if (modeSelect && runtime.mode) {{
+        modeSelect.value = runtime.mode;
+      }}
       let html = '';
       
       if (runtime.read_only) {{
@@ -717,8 +770,83 @@ def create_app(root: Path) -> FastAPI:
         const data = await res.json();
         hydratePromptModules(data);
         hydrateRuntimeStatus(data.runtime);
+        hydrateEditableConfigOptions(data.editable_configs || []);
       }} catch (_error) {{
         setStatus('prompt-modules-status', '加载模块编排失败', true);
+      }}
+    }}
+
+    function hydrateEditableConfigOptions(files) {{
+      const select = document.getElementById('editable-config-file');
+      if (!select || !Array.isArray(files) || !files.length) return;
+      const current = select.value;
+      select.innerHTML = files.map(file => `<option value="${{escapeHtml(file)}}">${{escapeHtml(file)}}</option>`).join('');
+      select.value = files.includes(current) ? current : files[0];
+    }}
+
+    async function loadEditableConfig() {{
+      const file = document.getElementById('editable-config-file').value;
+      if (!file) return;
+      try {{
+        const res = await fetch(`/config/editable/${{encodeURIComponent(file)}}`);
+        if (!res.ok) {{
+          setStatus('editable-config-status', await readErrorDetail(res, '加载配置失败'), true);
+          return;
+        }}
+        const data = await res.json();
+        document.getElementById('editable-config-content').value = data.content || '';
+        setStatus('editable-config-status', '配置已载入');
+      }} catch (_error) {{
+        setStatus('editable-config-status', '网络错误', true);
+      }}
+    }}
+
+    async function saveEditableConfig() {{
+      const file = document.getElementById('editable-config-file').value;
+      const content = document.getElementById('editable-config-content').value;
+      if (!file) {{
+        setStatus('editable-config-status', '请选择配置文件', true);
+        return;
+      }}
+      try {{
+        const res = await fetch(`/config/editable/${{encodeURIComponent(file)}}`, {{
+          method: 'PUT',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ content }}),
+        }});
+        if (!res.ok) {{
+          setStatus('editable-config-status', await readErrorDetail(res, '保存配置失败'), true);
+          return;
+        }}
+        const data = await res.json();
+        document.getElementById('editable-config-content').value = data.content || '';
+        await loadPromptModules();
+        setStatus('editable-config-status', '配置保存成功 ✓');
+      }} catch (_error) {{
+        setStatus('editable-config-status', '网络错误', true);
+      }}
+    }}
+
+    async function saveRuntimeMode() {{
+      const mode = document.getElementById('runtime-mode-select').value;
+      try {{
+        const res = await fetch('/config/runtime-mode', {{
+          method: 'PUT',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ mode }}),
+        }});
+        if (!res.ok) {{
+          setStatus('runtime-mode-status', await readErrorDetail(res, '保存运行模式失败'), true);
+          return;
+        }}
+        const data = await res.json();
+        hydrateRuntimeStatus(data.runtime);
+        if (document.getElementById('editable-config-file').value === 'runtime.toml') {{
+          await loadEditableConfig();
+        }}
+        setStatus('runtime-mode-status', '运行模式已更新 ✓');
+      }} catch (_error) {{
+        setStatus('runtime-mode-status', '网络错误', true);
       }}
     }}
 
@@ -928,12 +1056,14 @@ def create_app(root: Path) -> FastAPI:
     // Init
     document.getElementById('prompt-file').addEventListener('change', loadPrompt);
     document.getElementById('persona-file').addEventListener('change', loadPersona);
+    document.getElementById('editable-config-file').addEventListener('change', loadEditableConfig);
     
     // Initial loads
     refreshPromptFiles().then(() => {{ if (document.getElementById('prompt-file').value) loadPrompt(); }});
     refreshPersonaFiles().then(() => {{ if (document.getElementById('persona-file').value) loadPersona(); }});
     loadAllMemories();
     loadPromptModules();
+    loadEditableConfig();
     loadLogs();
     loadPipelineRuns();
     loadPendingApprovals();
