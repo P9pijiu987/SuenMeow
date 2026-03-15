@@ -1,0 +1,16 @@
+[planner]
+provider = "default"
+model = "deepseek-chat"
+
+[replyer]
+provider = "default"
+model = "deepseek-reasoner"
+
+[memory]
+provider = "default"
+model = "deepseek-reasoner"
+
+[webui]
+provider = "default"
+model = "deepseek-chat"
+
