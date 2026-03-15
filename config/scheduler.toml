@@ -1,0 +1,5 @@
+[polling]
+notification_interval_seconds = 5
+burst_scan_interval_seconds = 60
+hourly_scan_interval_seconds = 3600
+nightly_memory_hour = 0

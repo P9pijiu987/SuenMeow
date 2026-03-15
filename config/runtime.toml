@@ -1,0 +1,11 @@
+read_only = true
+mark_notifications_read = false
+shadow_mode = false
+allow_send_reply = false
+require_approval_before_send = true
+panic_switch = false
+topic_cooldown_minutes = 0
+blackout_start_hour = 22
+blackout_end_hour = 6
+muted_topic_ids = []
+muted_usernames = []
