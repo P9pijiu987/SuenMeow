@@ -5,6 +5,7 @@ from dataclasses import field
 import json
 import os
 from pathlib import Path
+import shutil
 from typing import Any
 import tomllib
 
@@ -13,6 +14,16 @@ DEFAULT_PLANNER_PROMPT_MODULES = ("planner.md", "safety_rules.md")
 DEFAULT_REPLYER_PROMPT_MODULES = ("replyer.md", "style_rules.md", "safety_rules.md")
 DEFAULT_MEMORY_PROMPT_MODULES = ("memory_user_update.md", "memory_self_update.md")
 PROMPT_MODULES_CONFIG_FILENAME = "prompt_modules.toml"
+EDITABLE_CONFIG_FILENAMES = (
+    "forum.toml",
+    "models.toml",
+    "personas.toml",
+    PROMPT_MODULES_CONFIG_FILENAME,
+    "runtime.toml",
+    "scheduler.toml",
+    "thresholds.toml",
+    "webui.toml",
+)
 
 
 @dataclass(slots=True)
@@ -170,6 +181,18 @@ class Settings:
     prompt_modules: PromptModulesConfig
 
 
+def runtime_mode_name(runtime: RuntimeConfig) -> str:
+    if runtime.read_only:
+        return "read-only"
+    if runtime.shadow_mode and runtime.allow_send_reply and runtime.require_approval_before_send:
+        return "shadow"
+    if (not runtime.shadow_mode) and runtime.allow_send_reply and runtime.require_approval_before_send:
+        return "approval"
+    if (not runtime.shadow_mode) and runtime.allow_send_reply and (not runtime.require_approval_before_send):
+        return "direct-send"
+    return "custom"
+
+
 def _load_toml(path: Path) -> dict[str, Any]:
     with path.open("rb") as handle:
         return tomllib.load(handle)
@@ -296,6 +319,44 @@ def save_prompt_modules(paths: AppPaths, prompt_modules: PromptModulesConfig) ->
     tmp_target = target.with_suffix(".tmp")
     _ = tmp_target.write_text(content, encoding="utf-8")
     _ = tmp_target.replace(target)
+
+
+def editable_config_filenames() -> list[str]:
+    return list(EDITABLE_CONFIG_FILENAMES)
+
+
+def validate_editable_config_filename(filename: str) -> str:
+    candidate = Path(filename)
+    if candidate.name != filename or candidate.suffix != ".toml":
+        raise ValueError(f"Invalid config filename: {filename}")
+    if filename not in EDITABLE_CONFIG_FILENAMES:
+        raise ValueError(f"Config file is not editable from WebUI: {filename}")
+    return filename
+
+
+def save_editable_config_text(paths: AppPaths, filename: str, content: str) -> Settings:
+    safe_filename = validate_editable_config_filename(filename)
+    _ = tomllib.loads(content)
+    target = paths.config_dir / safe_filename
+    backup = target.with_suffix(target.suffix + ".bak")
+    tmp_target = target.with_suffix(target.suffix + ".tmp")
+    had_original = target.exists()
+    if had_original:
+        _ = shutil.copyfile(target, backup)
+    try:
+        _ = tmp_target.write_text(content, encoding="utf-8")
+        _ = tmp_target.replace(target)
+        settings = load_settings(paths)
+    except Exception:
+        if tmp_target.exists():
+            _ = tmp_target.unlink()
+        if had_original and backup.exists():
+            _ = backup.replace(target)
+        raise
+    else:
+        if backup.exists():
+            _ = backup.unlink()
+        return settings
 
 
 def load_settings(paths: AppPaths) -> Settings:
