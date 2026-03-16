@@ -25,8 +25,8 @@ from bot.settings import enabled_prompt_module_names
 from db.repositories import Database
 
 
-type ForumPost = dict[str, object]
-type RouteDescription = dict[str, str]
+ForumPost = dict[str, object]
+RouteDescription = dict[str, str]
 
 
 class PromptBundle(TypedDict):
