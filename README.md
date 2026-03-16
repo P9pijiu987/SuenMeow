@@ -673,7 +673,6 @@ Windows 用户可以手动复制文件。
 
 - `SUENMEOW_WEB_PORT=8000`
 - `SUENMEOW_CONFIG_DIR=./config`
-- `SUENMEOW_DATA_DIR=./data`
 - `SUENMEOW_LOG_DIR=./logs`
 
 ### 8.2 启动整个栈
@@ -690,10 +689,15 @@ docker compose up --build
 它们会共享：
 
 - `config/`
-- `data/`
+- `suenmeow_data`（Docker named volume，挂载到容器内 `/app/data`）
 - `logs/`
 
-因此你通过 WebUI 修改的**非敏感配置**、运行产生的数据库、日志文件，都会保留在宿主机目录中。
+因此你通过 WebUI 修改的**非敏感配置**、运行产生的数据库、日志文件都会持久化：
+
+- 配置和日志在宿主机目录中
+- SQLite 数据在 Docker 卷 `suenmeow_data` 中
+
+如果你从旧版本（`./data:/app/data`）迁移到当前版本，建议在停机状态下先备份旧 `./data/suenmeow.sqlite3`，再把它导入卷内。
 
 ### 8.3 验证启动成功
 
@@ -702,7 +706,8 @@ docker compose up --build
 - 浏览器打开 `http://localhost:8000/health`
 - 返回 `{"status": "正常"}`
 - `logs/latest.log` 已生成
-- `data/suenmeow.sqlite3` 已生成
+- `docker volume ls` 中可见 `suenmeow_data`
+- `docker compose exec suenmeow-web ls /app/data` 能看到 `suenmeow.sqlite3`
 
 ### 8.4 更严格的生产启动方式
 
@@ -720,6 +725,15 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
 - `init: true`，减少容器内僵尸进程/信号处理问题
 - `stop_grace_period: 30s`，给 Worker 留出更稳妥的退出时间
+
+### 8.5 迁移/回滚时的数据注意事项（SQLite）
+
+- 当前 Compose 默认将 SQLite 放在 Docker 卷 `suenmeow_data`，不再直接绑定宿主机 `./data`。
+- 回滚到旧版本（仍使用 `./data:/app/data`）前，先从卷导出数据库，避免出现“容器启动了但是空库”的误判。
+- 建议保留双备份：
+  - 版本切换前导出一份 `suenmeow.sqlite3`
+  - 回滚成功后再次导出一份用于对比
+- 如果你使用 `docker-compose.prod.yml`，`/app/config` 会以只读方式挂载，因此 WebUI 的“运行模式切换”和“非敏感配置编辑”不会写回成功；这属于预期行为，生产环境应在宿主机修改配置后重启相关服务。
 
 更详细的部署、重启验证、回滚步骤请看：
 

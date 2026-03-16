@@ -5,7 +5,7 @@ services:
       SUENMEOW_ENV: production
     volumes:
       - ./config:/app/config:ro
-      - ./data:/app/data
+      - suenmeow_data:/app/data
       - ./logs:/app/logs
 
   suenmeow-worker:
@@ -14,5 +14,5 @@ services:
       SUENMEOW_ENV: production
     volumes:
       - ./config:/app/config:ro
-      - ./data:/app/data
+      - suenmeow_data:/app/data
       - ./logs:/app/logs

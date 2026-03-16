@@ -14,7 +14,7 @@ SuenMeow 以两个长期运行的进程工作：
 两个服务共用同一个镜像，并挂载同一组持久化目录：
 
 - `config/` —— TOML 运行配置
-- `data/` —— SQLite 数据库（`data/suenmeow.sqlite3`）
+- `suenmeow_data`（Docker named volume）—— SQLite 数据库（容器内 `/app/data/suenmeow.sqlite3`）
 - `logs/` —— 运行日志（`logs/latest.log`）
 
 基础 Compose 栈还额外启用了：
@@ -39,6 +39,8 @@ docker compose up --build
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
+
+注意：该模式下 `./config:/app/config:ro` 为只读挂载，因此 WebUI 中涉及写配置的操作（如运行模式切换、非敏感 TOML 保存）会失败；生产环境应在宿主机修改配置后再重启服务。
 
 ## 3. 配置说明
 
@@ -67,7 +69,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 4. 启动整个栈。
 5. 打开 `http://localhost:${SUENMEOW_WEB_PORT:-8000}/health`。
 6. 确认 `logs/latest.log` 已生成。
-7. 确认 `data/suenmeow.sqlite3` 已生成。
+7. 确认 `docker compose exec suenmeow-web ls /app/data` 可看到 `suenmeow.sqlite3`。
 
 ## 6. 重启 / 持久化验证
 
@@ -79,10 +81,15 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 4. 执行停止：`docker compose down`。
 5. 再重新启动。
 6. 启动后确认以下文件/目录仍然存在：
-   - `config/`
-   - `data/suenmeow.sqlite3`
-   - `logs/latest.log`
+    - `config/`
+    - `/app/data/suenmeow.sqlite3`（位于 Docker 卷 `suenmeow_data`）
+    - `logs/latest.log`
 7. 重新打开管理端，确认最近的流水、审批数据或管理状态仍然存在。
+
+补充建议：
+
+- 可用 `docker volume inspect suenmeow_data` 确认卷存在。
+- 若怀疑启动竞态导致 SQLite 锁冲突，先看 worker/web 日志中是否仅短暂告警，随后恢复正常。
 
 ## 7. 滚动修改配置
 
@@ -116,7 +123,17 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
 4. 检查 `/health` 与 `docker compose logs`。
-5. 在重新开启任何发送能力前，先确认 `data/suenmeow.sqlite3` 与 `logs/latest.log` 都完好无损。
+5. 在重新开启任何发送能力前，先确认 `/app/data/suenmeow.sqlite3`（卷内）与 `logs/latest.log` 都完好无损。
+
+### 回滚路径差异提醒（旧版 bind mount ↔ 新版 named volume）
+
+- 新版使用 `suenmeow_data:/app/data`。
+- 旧版使用 `./data:/app/data`。
+- 在这两种部署之间来回切换时，必须显式迁移 SQLite 文件：
+  1. 停机并备份当前数据库。
+  2. 从当前存储位置导出 `suenmeow.sqlite3`。
+  3. 导入到目标存储位置后再启动。
+  4. 启动后通过 `/health` + 管理端流水记录进行一致性核验。
 
 ## 9. 当前限制
 

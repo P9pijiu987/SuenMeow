@@ -7,7 +7,7 @@ x-suenmeow-common: &suenmeow-common
   stop_grace_period: 30s
   volumes:
     - ./config:/app/config
-    - ./data:/app/data
+    - suenmeow_data:/app/data
     - ./logs:/app/logs
 
 services:
@@ -34,3 +34,6 @@ services:
     <<: *suenmeow-common
     container_name: suenmeow-worker
     command: ["python", "main.py", "worker", "--root", "/app"]
+
+volumes:
+  suenmeow_data:

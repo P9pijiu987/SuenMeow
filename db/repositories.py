@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -53,20 +54,47 @@ class PendingReply:
 
 
 class Database:
+    CONNECT_TIMEOUT_SECONDS = 5.0
+    BUSY_TIMEOUT_MILLISECONDS = 5000
+    INIT_MAX_ATTEMPTS = 3
+    INIT_RETRY_BACKOFF_SECONDS = 0.2
+
     def __init__(self, path: Path) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path, timeout=self.CONNECT_TIMEOUT_SECONDS)
+        connection.execute(f"PRAGMA busy_timeout = {self.BUSY_TIMEOUT_MILLISECONDS}")
         connection.row_factory = sqlite3.Row
         return connection
 
     def initialize(self) -> None:
-        with self.connect() as connection:
-            for statement in SCHEMA_STATEMENTS:
-                connection.execute(statement)
-            connection.commit()
+        for attempt in range(1, self.INIT_MAX_ATTEMPTS + 1):
+            try:
+                with self.connect() as connection:
+                    for statement in SCHEMA_STATEMENTS:
+                        connection.execute(statement)
+                    connection.commit()
+                return
+            except sqlite3.OperationalError as exc:
+                if not self._is_transient_init_error(exc) or attempt >= self.INIT_MAX_ATTEMPTS:
+                    raise RuntimeError(
+                        f"Failed to initialize SQLite database at {self.path} "
+                        f"after {attempt} attempt(s): {exc}"
+                    ) from exc
+                time.sleep(self.INIT_RETRY_BACKOFF_SECONDS * attempt)
+
+    @staticmethod
+    def _is_transient_init_error(error: sqlite3.OperationalError) -> bool:
+        message = str(error).lower()
+        transient_markers = (
+            "database is locked",
+            "database schema is locked",
+            "database table is locked",
+            "database is busy",
+        )
+        return any(marker in message for marker in transient_markers)
 
     @staticmethod
     def _utcnow() -> str:

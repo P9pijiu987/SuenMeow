@@ -22,6 +22,9 @@ def test_base_compose_defines_web_and_worker_services() -> None:
     assert 'command: ["python", "main.py", "worker", "--root", "/app"]' in compose
     assert '- "${SUENMEOW_WEB_PORT:-8000}:8000"' in compose
     assert "healthcheck:" in compose
+    assert "suenmeow_data:/app/data" in compose
+    assert "volumes:" in compose
+    assert "suenmeow_data:" in compose
 
 
 def test_prod_compose_makes_config_read_only() -> None:
@@ -31,6 +34,7 @@ def test_prod_compose_makes_config_read_only() -> None:
     assert "suenmeow-worker:" in compose
     assert "SUENMEOW_ENV: production" in compose
     assert compose.count("./config:/app/config:ro") == 2
+    assert compose.count("suenmeow_data:/app/data") == 2
 
 
 def test_webui_default_host_is_container_friendly() -> None:

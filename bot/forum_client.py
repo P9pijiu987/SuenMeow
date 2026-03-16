@@ -72,7 +72,8 @@ class ForumClient:
 
     @classmethod
     def classify_notification(cls, item: dict[str, Any]) -> tuple[str, bool]:
-        notification_code = item.get("notification_type")
+        notification_code_raw = item.get("notification_type")
+        notification_code: int = notification_code_raw if isinstance(notification_code_raw, int) else -1
         notification_type = cls.NOTIFICATION_TYPE_MAP.get(notification_code, "generic")
         is_direct_trigger = notification_type in {"mentioned", "replied", "quoted", "private_message", "group_mentioned"}
         return notification_type, is_direct_trigger
@@ -97,11 +98,31 @@ class ForumClient:
         )
         response.raise_for_status()
 
+    @staticmethod
+    def _is_notifications_request(path: str) -> bool:
+        return path.startswith("/notifications.json")
+
+    async def _is_session_authenticated(self) -> bool:
+        response = await self.client.request(
+            "GET",
+            f"{self.forum.base_url}/session/current.json",
+            headers={"accept": "application/json"},
+        )
+        if response.status_code in {401, 403, 404}:
+            return False
+        if response.status_code >= 400:
+            return True
+        try:
+            payload = response.json()
+        except ValueError:
+            return True
+        return payload.get("current_user") is not None
+
     async def request(self, method: str, path: str, *, retry_on_auth: bool = True, **kwargs: Any) -> httpx.Response:
         url = path if path.startswith("http") else f"{self.forum.base_url}{path}"
         headers = dict(kwargs.pop("headers", {}))
         if self.csrf_token:
-            headers.setdefault("x-csrf-token", self.csrf_token)
+            headers["x-csrf-token"] = self.csrf_token
         response = await self.client.request(method, url, headers=headers, **kwargs)
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
@@ -110,8 +131,19 @@ class ForumClient:
             await asyncio.sleep(wait_seconds)
             response = await self.client.request(method, url, headers=headers, **kwargs)
         if retry_on_auth and response.status_code in {401, 403} and "BAD CSRF" in response.text.upper():
+            await response.aclose()
             await self.login()
+            headers.pop("x-csrf-token", None)
             return await self.request(method, path, retry_on_auth=False, headers=headers, **kwargs)
+        if retry_on_auth and (
+            response.status_code == 401
+            or (response.status_code == 403 and self._is_notifications_request(path))
+        ):
+            if await self._is_session_authenticated() is False:
+                await response.aclose()
+                await self.login()
+                headers.pop("x-csrf-token", None)
+                return await self.request(method, path, retry_on_auth=False, headers=headers, **kwargs)
         response.raise_for_status()
         return response
 
