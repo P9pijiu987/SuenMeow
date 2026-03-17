@@ -59,6 +59,18 @@ async def approve_pending_reply(pending_reply_id: int, request: Request) -> dict
     return item
 
 
+@router.post("/pending-replies/{pending_reply_id}/reject", summary="拒绝待处理回复")
+def reject_pending_reply(pending_reply_id: int, request: Request) -> dict[str, object]:
+    approval_service = request.app.state.approval_service
+    try:
+        item = approval_service.reject_pending_reply(pending_reply_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return item
+
+
 @router.get("/{topic_id}/debug", summary="调试单个话题")
 async def debug_topic(topic_id: int, request: Request) -> dict[str, object]:
     settings = request.app.state.settings

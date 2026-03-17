@@ -29,23 +29,48 @@ class NotificationWorker:
         events: list[dict[str, object]] = []
         for notification in notifications:
             if notification.topic_id is None:
+                logger.info(
+                    "notification skipped: no topic_id; notification_id=%s type=%s",
+                    notification.notification_id,
+                    notification.notification_type,
+                )
                 await self._maybe_mark_read(notification.notification_id)
                 continue
             if self.database.is_topic_banned(notification.topic_id):
+                logger.info(
+                    "notification skipped: topic banned; topic_id=%s notification_id=%s type=%s",
+                    notification.topic_id,
+                    notification.notification_id,
+                    notification.notification_type,
+                )
                 await self._maybe_mark_read(notification.notification_id)
                 continue
-            trigger_reason = f"notification:{notification.notification_type}"
-            if notification.is_direct_trigger:
-                trigger_reason = "notification"
+            if not notification.is_direct_trigger:
+                logger.info(
+                    "notification skipped: low-value notification; topic_id=%s notification_id=%s type=%s",
+                    notification.topic_id,
+                    notification.notification_id,
+                    notification.notification_type,
+                )
+                await self._maybe_mark_read(notification.notification_id)
+                continue
             event: dict[str, object] = {
                 "topic_id": notification.topic_id,
-                "reason": trigger_reason,
+                "reason": "notification",
                 "source": "notification_worker",
                 "notification_id": notification.notification_id,
                 "notification_type": notification.notification_type,
                 "is_direct_trigger": notification.is_direct_trigger,
             }
-            if self.database.record_trigger_event(event):
+            record_result = self.database.record_trigger_event(event)
+            if getattr(record_result, "status", None) in {"created", "merged"}:
                 events.append(event)
+            logger.info(
+                "notification evaluated; topic_id=%s notification_id=%s type=%s source=notification_worker result=%s",
+                notification.topic_id,
+                notification.notification_id,
+                notification.notification_type,
+                getattr(record_result, "status", record_result),
+            )
             await self._maybe_mark_read(notification.notification_id)
         return events

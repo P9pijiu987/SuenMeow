@@ -712,6 +712,16 @@ class Pipeline:
                 action="cooldown_skip",
                 reason="topic cooldown active",
             )
+        if self.database.has_pending_reply_for_topic(topic_id):
+            return self._record_short_circuit_run(
+                event_id=event_id,
+                topic_id=topic_id,
+                topic_title=topic_title,
+                trigger_reason=trigger_reason,
+                highest_post_number=highest_post_number,
+                action="pending_approval_skip",
+                reason="topic already has pending approval",
+            )
         posts = await forum_client.get_topic_selected_posts(
             topic_id,
             recent_post_limit=self.context_builder.forum_recent_post_limit(),
@@ -740,15 +750,18 @@ class Pipeline:
         elif self._should_shadow_reply(result):
             action = "shadow_reply"
         elif self._should_queue_for_approval(forum_client, result):
-            pending_reply_id = self.database.create_pending_reply(
-                topic_id=topic_id,
-                topic_title=topic_title,
-                trigger_reason=trigger_reason,
-                target_post_number=result["decision"].target_post_number,
-                draft_content=result["draft"].content,
-                decision=result["decision"].to_dict(),
-            )
-            action = "reply_pending_approval"
+            try:
+                pending_reply_id = self.database.create_pending_reply(
+                    topic_id=topic_id,
+                    topic_title=topic_title,
+                    trigger_reason=trigger_reason,
+                    target_post_number=result["decision"].target_post_number,
+                    draft_content=result["draft"].content,
+                    decision=result["decision"].to_dict(),
+                )
+                action = "reply_pending_approval"
+            except RuntimeError:
+                action = "pending_approval_skip"
         elif self._should_send_reply(forum_client, result):
             try:
                 reply_response = await forum_client.reply(

@@ -98,6 +98,30 @@ def test_topics_pending_reply_routes(tmp_path: Path) -> None:
     assert database.has_replied_in_topic(7) is True
 
 
+def test_topics_pending_reply_reject_route(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path)
+    database: Database = app.state.database
+    pending_reply_id = database.create_pending_reply(
+        topic_id=8,
+        topic_title="topic reject",
+        trigger_reason="notification",
+        target_post_number=4,
+        draft_content="mrrp",
+        decision={"should_reply": True, "reason": "reject me"},
+    )
+
+    with TestClient(app) as client:
+        rejected = client.post(f"/topics/pending-replies/{pending_reply_id}/reject")
+        assert rejected.status_code == 200
+        body = rejected.json()
+        assert body["status"] == "rejected"
+
+    pending = database.get_pending_reply(pending_reply_id)
+    assert pending is not None
+    assert pending.status == "rejected"
+
+
 def test_config_route_exposes_approval_flag(tmp_path: Path) -> None:
     _write_config(tmp_path)
     app = create_app(tmp_path)

@@ -997,7 +997,11 @@ def create_app(root: Path) -> FastAPI:
           
           let actionBtn = '';
           if (item.status === 'pending') {{
-            actionBtn = `<button type="button" onclick="approvePendingReply('${{item.id}}', this)" style="padding: 6px 12px; font-size: 12px;">✅ 批准发送</button>`;
+            actionBtn = `
+              <div style="display: flex; gap: 8px;">
+                <button type="button" onclick="approvePendingReply('${{item.id}}', this)" style="padding: 6px 12px; font-size: 12px;">✅ 批准发送</button>
+                <button type="button" class="secondary" onclick="rejectPendingReply('${{item.id}}', this)" style="padding: 6px 12px; font-size: 12px;">❌ 拒绝</button>
+              </div>`;
           }}
 
           return `
@@ -1024,8 +1028,6 @@ def create_app(root: Path) -> FastAPI:
     }}
 
     async function approvePendingReply(id, btnEl) {{
-      if (!confirm('确定要批准并发送该回复吗？')) return;
-      
       const originalText = btnEl.textContent;
       btnEl.disabled = true;
       btnEl.textContent = '发送中...';
@@ -1037,17 +1039,45 @@ def create_app(root: Path) -> FastAPI:
         
         if (!res.ok) {{
           const err = await readErrorDetail(res, '审批失败');
-          alert('审批失败: ' + err);
+          setStatus('prompt-modules-status', '审批失败: ' + err, true);
           btnEl.disabled = false;
           btnEl.textContent = originalText;
           return;
         }}
         
-        alert('批准成功');
+        setStatus('prompt-modules-status', '批准成功 ✓');
         await loadPendingApprovals();
         await loadPipelineRuns();
       }} catch (e) {{
-        alert('网络错误: ' + e.message);
+        setStatus('prompt-modules-status', '网络错误: ' + e.message, true);
+        btnEl.disabled = false;
+        btnEl.textContent = originalText;
+      }}
+    }}
+
+    async function rejectPendingReply(id, btnEl) {{
+      const originalText = btnEl.textContent;
+      btnEl.disabled = true;
+      btnEl.textContent = '处理中...';
+
+      try {{
+        const res = await fetch(`/topics/pending-replies/${{id}}/reject`, {{
+          method: 'POST'
+        }});
+
+        if (!res.ok) {{
+          const err = await readErrorDetail(res, '拒绝失败');
+          setStatus('prompt-modules-status', '拒绝失败: ' + err, true);
+          btnEl.disabled = false;
+          btnEl.textContent = originalText;
+          return;
+        }}
+
+        setStatus('prompt-modules-status', '已拒绝该草稿 ✓');
+        await loadPendingApprovals();
+        await loadPipelineRuns();
+      }} catch (e) {{
+        setStatus('prompt-modules-status', '网络错误: ' + e.message, true);
         btnEl.disabled = false;
         btnEl.textContent = originalText;
       }}

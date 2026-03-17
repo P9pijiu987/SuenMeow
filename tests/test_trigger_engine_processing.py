@@ -166,8 +166,8 @@ async def test_process_pending_events_continues_after_single_event_failure(tmp_p
             {"topic_id": 124, "reason": "notification", "source": "notification_worker", "notification_id": 2},
         )
     )
-    assert first_added is True
-    assert second_added is True
+    assert first_added.status == "created"
+    assert second_added.status == "created"
 
     pending_before = engine.database.list_unprocessed_events()
     failing_event_id = int(pending_before[0]["id"])
@@ -187,4 +187,104 @@ async def test_process_pending_events_continues_after_single_event_failure(tmp_p
     processed_map = {int(item["id"]): item["processed_at"] for item in recent}
     assert processed_map[succeeding_event_id] is not None
     assert processed_map[failing_event_id] is None
+    failure_map = {int(item["id"]): int(item["failure_count"]) for item in recent}
+    assert failure_map[failing_event_id] == 1
+    assert failure_map[succeeding_event_id] == 0
+    await engine.forum_client.aclose()
+
+
+@pytest.mark.anyio
+async def test_process_pending_events_marks_event_processed_after_second_failure(tmp_path: Path) -> None:
+    engine = _make_engine(tmp_path)
+    added = engine.database.record_trigger_event(
+        cast(
+            dict[str, object],
+            {"topic_id": 123, "reason": "notification", "source": "notification_worker", "notification_id": 1},
+        )
+    )
+    assert added.status == "created"
+
+    pending_before = engine.database.list_unprocessed_events()
+    failing_event_id = int(pending_before[0]["id"])
+    cast(Any, engine).pipeline = _StubPipeline(fail_event_ids={failing_event_id})
+    cast(Any, engine).forum_client = _StubForumClient()
+
+    first_processed = await engine._process_pending_events()
+    second_processed = await engine._process_pending_events()
+
+    assert first_processed == []
+    assert second_processed == []
+    assert engine.database.list_unprocessed_events() == []
+
+    recent = engine.database.list_recent_trigger_events(limit=1)
+    assert int(recent[0]["id"]) == failing_event_id
+    assert recent[0]["processed_at"] is not None
+    assert recent[0]["failure_count"] == 2
+    assert recent[0]["last_error_text"] == f"boom:{failing_event_id}"
+    assert recent[0]["last_attempted_at"] is not None
+    await engine.forum_client.aclose()
+
+
+@pytest.mark.anyio
+async def test_process_pending_events_processes_event_when_retry_succeeds(tmp_path: Path) -> None:
+    engine = _make_engine(tmp_path)
+    added = engine.database.record_trigger_event(
+        cast(
+            dict[str, object],
+            {"topic_id": 123, "reason": "notification", "source": "notification_worker", "notification_id": 1},
+        )
+    )
+    assert added.status == "created"
+
+    pending_before = engine.database.list_unprocessed_events()
+    event_id = int(pending_before[0]["id"])
+
+    class _FailOncePipeline:
+        def __init__(self, target_event_id: int) -> None:
+            self.target_event_id = target_event_id
+            self.calls: list[int] = []
+
+        async def process_event(
+            self, forum_client: object, payload: dict[str, object], *, event_id: int | None = None
+        ) -> ProcessEventResult | None:
+            _ = forum_client
+            _ = payload
+            if event_id is None:
+                raise AssertionError("event_id should be provided")
+            self.calls.append(event_id)
+            if event_id == self.target_event_id and len(self.calls) == 1:
+                raise RuntimeError(f"boom:{event_id}")
+            return {
+                "action": "reply",
+                "pending_reply_id": None,
+                "topic_id": 123,
+                "topic_title": "topic",
+                "post_count": 0,
+                "decision": {},
+                "draft": {},
+                "memory_hits": {},
+                "persona_modules": [],
+                "planner_prompt_preview": "",
+                "replyer_prompt_preview": "",
+            }
+
+    pipeline = _FailOncePipeline(event_id)
+    cast(Any, engine).pipeline = pipeline
+    cast(Any, engine).forum_client = _StubForumClient()
+
+    first_processed = await engine._process_pending_events()
+    second_processed = await engine._process_pending_events()
+
+    assert first_processed == []
+    assert len(second_processed) == 1
+    assert second_processed[0]["action"] == "reply"
+    assert pipeline.calls == [event_id, event_id]
+    assert engine.database.list_unprocessed_events() == []
+
+    recent = engine.database.list_recent_trigger_events(limit=1)
+    assert int(recent[0]["id"]) == event_id
+    assert recent[0]["processed_at"] is not None
+    assert recent[0]["failure_count"] == 1
+    assert recent[0]["last_error_text"] == f"boom:{event_id}"
+    assert recent[0]["last_attempted_at"] is not None
     await engine.forum_client.aclose()

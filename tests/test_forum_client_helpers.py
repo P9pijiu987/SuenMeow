@@ -26,6 +26,22 @@ def test_classify_notification_distinguishes_direct_trigger() -> None:
     assert notification_type == "mentioned"
     assert is_direct_trigger is True
 
+    notification_type, is_direct_trigger = ForumClient.classify_notification({"notification_type": 2})
+    assert notification_type == "replied"
+    assert is_direct_trigger is True
+
+    notification_type, is_direct_trigger = ForumClient.classify_notification({"notification_type": 3})
+    assert notification_type == "quoted"
+    assert is_direct_trigger is True
+
     notification_type, is_direct_trigger = ForumClient.classify_notification({"notification_type": 5})
     assert notification_type == "liked"
+    assert is_direct_trigger is False
+
+    notification_type, is_direct_trigger = ForumClient.classify_notification({"notification_type": 6})
+    assert notification_type == "private_message"
+    assert is_direct_trigger is False
+
+    notification_type, is_direct_trigger = ForumClient.classify_notification({"notification_type": 12})
+    assert notification_type == "group_mentioned"
     assert is_direct_trigger is False

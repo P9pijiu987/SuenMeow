@@ -20,6 +20,9 @@ SCHEMA_STATEMENTS = [
         source TEXT NOT NULL,
         dedupe_key TEXT NOT NULL UNIQUE,
         payload_json TEXT,
+        failure_count INTEGER NOT NULL DEFAULT 0,
+        last_error_text TEXT,
+        last_attempted_at TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         processed_at TEXT
     )
@@ -100,5 +103,15 @@ SCHEMA_STATEMENTS = [
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_events_unique_unprocessed_topic
+    ON trigger_events(topic_id)
+    WHERE processed_at IS NULL
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_replies_unique_pending_topic
+    ON pending_replies(topic_id)
+    WHERE status = 'pending'
     """,
 ]

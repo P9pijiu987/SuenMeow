@@ -75,7 +75,7 @@ class ForumClient:
         notification_code_raw = item.get("notification_type")
         notification_code: int = notification_code_raw if isinstance(notification_code_raw, int) else -1
         notification_type = cls.NOTIFICATION_TYPE_MAP.get(notification_code, "generic")
-        is_direct_trigger = notification_type in {"mentioned", "replied", "quoted", "private_message", "group_mentioned"}
+        is_direct_trigger = notification_type in {"mentioned", "replied", "quoted"}
         return notification_type, is_direct_trigger
 
     async def aclose(self) -> None:
@@ -144,8 +144,26 @@ class ForumClient:
                 await self.login()
                 headers.pop("x-csrf-token", None)
                 return await self.request(method, path, retry_on_auth=False, headers=headers, **kwargs)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            body_preview = self._response_body_preview(response)
+            detail = f"response body: {body_preview}" if body_preview else "response body: (empty)"
+            raise httpx.HTTPStatusError(
+                f"{exc}. {detail}",
+                request=exc.request,
+                response=exc.response,
+            ) from exc
         return response
+
+    @staticmethod
+    def _response_body_preview(response: httpx.Response, limit: int = 300) -> str:
+        text = response.text.strip()
+        if not text:
+            return ""
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit]}…"
 
     async def list_latest_topics(self, page: int = 0) -> list[dict[str, Any]]:
         suffix = f"?page={page}" if page else ""

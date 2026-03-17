@@ -607,8 +607,11 @@ def test_homepage_includes_pending_approvals_panel_script(tmp_path: Path) -> Non
     assert "async function loadPendingApprovals()" in text
     assert "fetch('/topics/pending-replies')" in text
     assert "async function approvePendingReply" in text
+    assert "async function rejectPendingReply" in text
     assert "fetch(`/topics/pending-replies/${id}/approve`" in text
+    assert "fetch(`/topics/pending-replies/${id}/reject`" in text
     assert "待审核回复" in text
+    assert "拒绝" in text
 
 
 def test_homepage_server_renders_runtime_status_badges(tmp_path: Path) -> None:

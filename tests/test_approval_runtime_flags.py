@@ -128,3 +128,19 @@ def test_approve_fails_when_panic_switch_true(tmp_path: Path) -> None:
     assert pending is not None
     assert pending.status == "pending"
     assert pending.reply_post_id is None
+
+
+def test_reject_succeeds_even_when_runtime_read_only_true(tmp_path: Path) -> None:
+    _write_config(tmp_path, read_only=True, allow_send_reply=True)
+    app = create_app(tmp_path)
+    database = cast(Database, app.state.database)
+    pending_reply_id = _create_pending_reply(database)
+
+    with TestClient(app) as client:
+        response = client.post(f"/topics/pending-replies/{pending_reply_id}/reject")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "rejected"
+    pending = database.get_pending_reply(pending_reply_id)
+    assert pending is not None
+    assert pending.status == "rejected"

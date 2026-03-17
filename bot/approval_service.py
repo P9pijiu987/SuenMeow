@@ -56,6 +56,19 @@ class ApprovalService:
                 return candidate
         raise RuntimeError(f"pending reply {pending_reply_id} disappeared after send")
 
+    def reject_pending_reply(self, pending_reply_id: int) -> dict[str, Any]:
+        pending_reply = self.database.get_pending_reply(pending_reply_id)
+        if pending_reply is None:
+            raise KeyError(f"pending reply {pending_reply_id} not found")
+        if pending_reply.status != "pending":
+            raise RuntimeError(f"pending reply {pending_reply_id} is already {pending_reply.status}")
+        self.database.mark_pending_reply_rejected(pending_reply_id)
+        items = self.database.list_pending_replies(status=None, limit=100)
+        for candidate in items:
+            if int(candidate["id"]) == pending_reply_id:
+                return candidate
+        raise RuntimeError(f"pending reply {pending_reply_id} disappeared after reject")
+
     async def _reply(self, topic_id: int, draft_content: str, target_post_number: int | None) -> dict[str, Any]:
         if self._send_reply is not None:
             return await self._send_reply(topic_id, draft_content, target_post_number)

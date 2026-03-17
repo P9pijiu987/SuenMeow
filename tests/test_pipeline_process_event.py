@@ -635,6 +635,42 @@ async def test_process_event_queues_pending_reply_when_approval_required(tmp_pat
 
 
 @pytest.mark.anyio
+async def test_process_event_skips_when_topic_already_has_pending_reply(tmp_path: Path) -> None:
+    decision = PlannerDecision(
+        should_reply=True,
+        priority="normal",
+        target_username="bob",
+        target_post_number=5,
+        reason="reply due to notification",
+        style_notes="concise",
+        memory_action="none",
+    )
+    pipeline = _make_pipeline(
+        tmp_path,
+        allow_send_reply=True,
+        decision=decision,
+        require_approval_before_send=True,
+    )
+    _ = pipeline.database.create_pending_reply(
+        topic_id=123,
+        topic_title="topic title",
+        trigger_reason="notification",
+        target_post_number=5,
+        draft_content="existing draft",
+        decision={"should_reply": True, "reason": "existing"},
+    )
+    forum_client = FakeForumClient(read_only=False)
+
+    result = await pipeline.process_event(forum_client, {"topic_id": 123, "reason": "notification"}, event_id=7)
+
+    assert result is not None
+    assert result["action"] == "pending_approval_skip"
+    runs = pipeline.database.list_recent_pipeline_runs()
+    assert runs[0]["action"] == "pending_approval_skip"
+    assert runs[0]["decision"]["reason"] == "topic already has pending approval"
+
+
+@pytest.mark.anyio
 async def test_process_event_uses_shadow_reply_without_sending_or_queueing(tmp_path: Path) -> None:
     decision = PlannerDecision(
         should_reply=True,

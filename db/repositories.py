@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -9,6 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from db.schema import SCHEMA_STATEMENTS
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -53,6 +57,13 @@ class PendingReply:
     updated_at: str
 
 
+@dataclass(slots=True)
+class TriggerEventRecordResult:
+    status: str
+    event_id: int | None = None
+    merged_into_event_id: int | None = None
+
+
 class Database:
     CONNECT_TIMEOUT_SECONDS = 5.0
     BUSY_TIMEOUT_MILLISECONDS = 5000
@@ -75,6 +86,7 @@ class Database:
                 with self.connect() as connection:
                     for statement in SCHEMA_STATEMENTS:
                         connection.execute(statement)
+                    self._apply_runtime_migrations(connection)
                     connection.commit()
                 return
             except sqlite3.OperationalError as exc:
@@ -99,6 +111,21 @@ class Database:
     @staticmethod
     def _utcnow() -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _apply_runtime_migrations(connection: sqlite3.Connection) -> None:
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(trigger_events)").fetchall()
+        }
+        if "failure_count" not in columns:
+            connection.execute(
+                "ALTER TABLE trigger_events ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "last_error_text" not in columns:
+            connection.execute("ALTER TABLE trigger_events ADD COLUMN last_error_text TEXT")
+        if "last_attempted_at" not in columns:
+            connection.execute("ALTER TABLE trigger_events ADD COLUMN last_attempted_at TEXT")
 
     def is_topic_banned(self, topic_id: int) -> bool:
         with self.connect() as connection:
@@ -218,31 +245,36 @@ class Database:
         draft_content: str,
         decision: dict[str, Any],
     ) -> int:
+        if self.has_pending_reply_for_topic(topic_id):
+            raise RuntimeError(f"pending reply already exists for topic {topic_id}")
         now = self._utcnow()
         with self.connect() as connection:
-            cursor = connection.execute(
-                """
-                INSERT INTO pending_replies(
-                    topic_id,
-                    topic_title,
-                    trigger_reason,
-                    target_post_number,
-                    draft_content,
-                    decision_json,
-                    status,
-                    updated_at
-                ) VALUES(?, ?, ?, ?, ?, ?, 'pending', ?)
-                """,
-                (
-                    topic_id,
-                    topic_title,
-                    trigger_reason,
-                    target_post_number,
-                    draft_content,
-                    json.dumps(decision, ensure_ascii=False),
-                    now,
-                ),
-            )
+            try:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO pending_replies(
+                        topic_id,
+                        topic_title,
+                        trigger_reason,
+                        target_post_number,
+                        draft_content,
+                        decision_json,
+                        status,
+                        updated_at
+                    ) VALUES(?, ?, ?, ?, ?, ?, 'pending', ?)
+                    """,
+                    (
+                        topic_id,
+                        topic_title,
+                        trigger_reason,
+                        target_post_number,
+                        draft_content,
+                        json.dumps(decision, ensure_ascii=False),
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise RuntimeError(f"pending reply already exists for topic {topic_id}") from exc
             connection.commit()
         pending_reply_id = cursor.lastrowid
         if pending_reply_id is None:
@@ -264,6 +296,14 @@ class Database:
         if row is None:
             return None
         return PendingReply(**dict(row))
+
+    def has_pending_reply_for_topic(self, topic_id: int) -> bool:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM pending_replies WHERE topic_id = ? AND status = 'pending' LIMIT 1",
+                (topic_id,),
+            ).fetchone()
+        return row is not None
 
     def list_pending_replies(self, *, status: str | None = "pending", limit: int = 100) -> list[dict[str, Any]]:
         where_clause = "WHERE status = ?" if status is not None else ""
@@ -322,6 +362,23 @@ class Database:
             )
             connection.commit()
 
+    def mark_pending_reply_rejected(self, pending_reply_id: int) -> None:
+        now = self._utcnow()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE pending_replies
+                SET status = 'rejected',
+                    error_text = NULL,
+                    approved_at = NULL,
+                    sent_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (now, pending_reply_id),
+            )
+            connection.commit()
+
     def has_replied_in_topic(self, topic_id: int) -> bool:
         with self.connect() as connection:
             row = connection.execute(
@@ -356,7 +413,8 @@ class Database:
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, topic_id, reason, source, dedupe_key, payload_json, created_at, processed_at
+                SELECT id, topic_id, reason, source, dedupe_key, payload_json,
+                       failure_count, last_error_text, last_attempted_at, created_at, processed_at
                 FROM trigger_events
                 WHERE processed_at IS NULL
                 ORDER BY created_at ASC
@@ -378,6 +436,28 @@ class Database:
                 (self._utcnow(), event_id),
             )
             connection.commit()
+
+    def record_event_failure(self, event_id: int, error_text: str) -> int:
+        now = self._utcnow()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE trigger_events
+                SET failure_count = failure_count + 1,
+                    last_error_text = ?,
+                    last_attempted_at = ?
+                WHERE id = ?
+                """,
+                (error_text, now, event_id),
+            )
+            row = connection.execute(
+                "SELECT failure_count FROM trigger_events WHERE id = ?",
+                (event_id,),
+            ).fetchone()
+            connection.commit()
+        if row is None:
+            raise KeyError(f"trigger event not found: {event_id}")
+        return int(row["failure_count"])
 
     def get_user_memories(self, usernames: list[str]) -> dict[str, str]:
         if not usernames:
@@ -507,7 +587,8 @@ class Database:
         with self.connect() as connection:
             rows = connection.execute(
                 f"""
-                SELECT id, topic_id, reason, source, dedupe_key, payload_json, created_at, processed_at
+                SELECT id, topic_id, reason, source, dedupe_key, payload_json,
+                       failure_count, last_error_text, last_attempted_at, created_at, processed_at
                 FROM trigger_events
                 {where_clause}
                 ORDER BY created_at DESC, id DESC
@@ -536,7 +617,66 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def record_trigger_event(self, event: dict[str, object]) -> bool:
+    @staticmethod
+    def _build_trigger_dedupe_key(event: dict[str, object]) -> str:
+        source_value = event["source"]
+        source = source_value if isinstance(source_value, str) else str(source_value)
+        reason_value = event["reason"]
+        reason = reason_value if isinstance(reason_value, str) else str(reason_value)
+        topic_id_value = event["topic_id"]
+        topic_id = topic_id_value if isinstance(topic_id_value, int) else int(str(topic_id_value))
+        return f"{source}:{reason}:{topic_id}:{event.get('notification_id', '')}"
+
+    @staticmethod
+    def _trigger_summary(payload: dict[str, object]) -> dict[str, object]:
+        summary: dict[str, object] = {
+            "source": payload.get("source"),
+            "reason": payload.get("reason"),
+            "notification_id": payload.get("notification_id"),
+            "notification_type": payload.get("notification_type"),
+            "target_post_number": payload.get("target_post_number"),
+            "reply_count_1h": payload.get("reply_count_1h"),
+        }
+        return {key: value for key, value in summary.items() if value is not None}
+
+    def _normalize_trigger_payload(self, event: dict[str, object]) -> dict[str, object]:
+        payload = dict(event)
+        payload.setdefault("merged_event_count", 1)
+        payload.setdefault("merged_events", [self._trigger_summary(payload)])
+        return payload
+
+    def _merge_trigger_payload(
+        self,
+        existing_payload: dict[str, object],
+        incoming_event: dict[str, object],
+    ) -> dict[str, object]:
+        merged_payload = dict(existing_payload)
+        merged_payload.update(incoming_event)
+        merged_event_count_raw = existing_payload.get("merged_event_count", 1)
+        merged_event_count = merged_event_count_raw if isinstance(merged_event_count_raw, int) else 1
+        merged_history_raw = existing_payload.get("merged_events", [])
+        merged_history = list(merged_history_raw) if isinstance(merged_history_raw, list) else []
+        merged_history.append(self._trigger_summary(incoming_event))
+        merged_payload["merged_event_count"] = merged_event_count + 1
+        merged_payload["merged_events"] = merged_history[-20:]
+        return merged_payload
+
+    def _get_active_trigger_event_row(self, connection: sqlite3.Connection, topic_id: int) -> sqlite3.Row | None:
+        return connection.execute(
+            """
+            SELECT id, topic_id, reason, source, dedupe_key, payload_json
+            FROM trigger_events
+            WHERE topic_id = ? AND processed_at IS NULL
+            LIMIT 1
+            """,
+            (topic_id,),
+        ).fetchone()
+
+    def has_active_trigger_event_for_topic(self, topic_id: int) -> bool:
+        with self.connect() as connection:
+            return self._get_active_trigger_event_row(connection, topic_id) is not None
+
+    def record_trigger_event(self, event: dict[str, object]) -> TriggerEventRecordResult:
         source_value = event["source"]
         source = source_value if isinstance(source_value, str) else str(source_value)
         reason_value = event["reason"]
@@ -545,20 +685,125 @@ class Database:
         topic_id = topic_id_value if isinstance(topic_id_value, int) else int(str(topic_id_value))
         highest_seen_value = event.get("highest_seen_post_number")
         highest_seen_post_number = highest_seen_value if isinstance(highest_seen_value, int) else None
-        dedupe_key = f"{source}:{reason}:{topic_id}:{event.get('notification_id', '')}"
+        dedupe_key = self._build_trigger_dedupe_key(event)
+        normalized_payload = self._normalize_trigger_payload(event)
         with self.connect() as connection:
-            cursor = connection.execute(
-                "INSERT OR IGNORE INTO trigger_events(topic_id, reason, source, dedupe_key, payload_json) VALUES(?, ?, ?, ?, ?)",
-                (
+            if self.has_pending_reply_for_topic(topic_id):
+                logger.info(
+                    "trigger event blocked by pending approval; topic_id=%s source=%s reason=%s",
                     topic_id,
-                    reason,
                     source,
-                    dedupe_key,
-                    json.dumps(event, ensure_ascii=False),
-                ),
-            )
-            if cursor.rowcount == 0:
-                return False
+                    reason,
+                )
+                return TriggerEventRecordResult(status="blocked_pending")
+
+            active_row = self._get_active_trigger_event_row(connection, topic_id)
+            if active_row is not None:
+                if str(active_row["dedupe_key"]) == dedupe_key:
+                    logger.info(
+                        "trigger event duplicate skipped; topic_id=%s event_id=%s source=%s reason=%s",
+                        topic_id,
+                        active_row["id"],
+                        source,
+                        reason,
+                    )
+                    return TriggerEventRecordResult(status="duplicate", event_id=int(active_row["id"]))
+
+                existing_payload_raw = active_row["payload_json"]
+                existing_payload = json.loads(existing_payload_raw) if isinstance(existing_payload_raw, str) and existing_payload_raw else {}
+                merged_payload = self._merge_trigger_payload(existing_payload, event)
+                connection.execute(
+                    """
+                    UPDATE trigger_events
+                    SET reason = ?,
+                        source = ?,
+                        payload_json = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        reason,
+                        source,
+                        json.dumps(merged_payload, ensure_ascii=False),
+                        int(active_row["id"]),
+                    ),
+                )
+                connection.commit()
+                self.note_topic_triggered(topic_id, highest_seen_post_number)
+                logger.info(
+                    "trigger event merged into active topic unit; topic_id=%s event_id=%s source=%s reason=%s",
+                    topic_id,
+                    active_row["id"],
+                    source,
+                    reason,
+                )
+                return TriggerEventRecordResult(
+                    status="merged",
+                    event_id=int(active_row["id"]),
+                    merged_into_event_id=int(active_row["id"]),
+                )
+
+            try:
+                cursor = connection.execute(
+                    "INSERT INTO trigger_events(topic_id, reason, source, dedupe_key, payload_json) VALUES(?, ?, ?, ?, ?)",
+                    (
+                        topic_id,
+                        reason,
+                        source,
+                        dedupe_key,
+                        json.dumps(normalized_payload, ensure_ascii=False),
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                active_row = self._get_active_trigger_event_row(connection, topic_id)
+                if active_row is not None:
+                    existing_payload_raw = active_row["payload_json"]
+                    existing_payload = json.loads(existing_payload_raw) if isinstance(existing_payload_raw, str) and existing_payload_raw else {}
+                    merged_payload = self._merge_trigger_payload(existing_payload, event)
+                    connection.execute(
+                        """
+                        UPDATE trigger_events
+                        SET reason = ?,
+                            source = ?,
+                            payload_json = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            reason,
+                            source,
+                            json.dumps(merged_payload, ensure_ascii=False),
+                            int(active_row["id"]),
+                        ),
+                    )
+                    connection.commit()
+                    self.note_topic_triggered(topic_id, highest_seen_post_number)
+                    return TriggerEventRecordResult(
+                        status="merged",
+                        event_id=int(active_row["id"]),
+                        merged_into_event_id=int(active_row["id"]),
+                    )
+                duplicate_row = connection.execute(
+                    "SELECT id FROM trigger_events WHERE dedupe_key = ? LIMIT 1",
+                    (dedupe_key,),
+                ).fetchone()
+                if duplicate_row is not None:
+                    logger.info(
+                        "trigger event duplicate skipped after integrity check; topic_id=%s event_id=%s source=%s reason=%s",
+                        topic_id,
+                        duplicate_row["id"],
+                        source,
+                        reason,
+                    )
+                    return TriggerEventRecordResult(status="duplicate", event_id=int(duplicate_row["id"]))
+                raise
+
             connection.commit()
-            self.note_topic_triggered(topic_id, highest_seen_post_number)
-            return True
+            event_id = cursor.lastrowid
+        self.note_topic_triggered(topic_id, highest_seen_post_number)
+        logger.info(
+            "trigger event created; topic_id=%s event_id=%s source=%s reason=%s",
+            topic_id,
+            event_id,
+            source,
+            reason,
+        )
+        return TriggerEventRecordResult(status="created", event_id=int(event_id) if event_id is not None else None)

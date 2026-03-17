@@ -5,6 +5,7 @@ from typing import cast
 import pytest
 
 from db.repositories import Database
+from db.repositories import TriggerEventRecordResult
 
 
 def test_topic_state_and_cursor_roundtrip(tmp_path: Path) -> None:
@@ -33,8 +34,11 @@ def test_trigger_event_dedup_and_processing(tmp_path: Path) -> None:
             "notification_id": 99,
         },
     )
-    assert database.record_trigger_event(event) is True
-    assert database.record_trigger_event(event) is False
+    first = database.record_trigger_event(event)
+    second = database.record_trigger_event(event)
+    assert isinstance(first, TriggerEventRecordResult)
+    assert first.status == "created"
+    assert second.status == "duplicate"
 
     pending = database.list_unprocessed_events()
     assert len(pending) == 1
@@ -43,9 +47,37 @@ def test_trigger_event_dedup_and_processing(tmp_path: Path) -> None:
     recent = database.list_recent_trigger_events()
     assert len(recent) == 1
     assert recent[0]["reason"] == "notification"
+    assert recent[0]["failure_count"] == 0
+    assert recent[0]["last_error_text"] is None
+    assert recent[0]["last_attempted_at"] is None
 
     database.mark_event_processed(int(pending[0]["id"]))
     assert database.list_unprocessed_events() == []
+
+
+def test_record_event_failure_updates_failure_metadata(tmp_path: Path) -> None:
+    database = Database(tmp_path / "events-failure.sqlite3")
+    database.initialize()
+
+    event = cast(
+        dict[str, object],
+        {
+            "topic_id": 7,
+            "reason": "notification",
+            "source": "notification_worker",
+            "notification_id": 99,
+        },
+    )
+    assert database.record_trigger_event(event).status == "created"
+    event_id = int(database.list_unprocessed_events()[0]["id"])
+
+    failure_count = database.record_event_failure(event_id, "HTTP 422 response body: too short")
+
+    assert failure_count == 1
+    recent = database.list_recent_trigger_events(limit=1)
+    assert recent[0]["failure_count"] == 1
+    assert recent[0]["last_error_text"] == "HTTP 422 response body: too short"
+    assert recent[0]["last_attempted_at"] is not None
 
 
 def test_trigger_event_dedup_is_atomic_with_insert_or_ignore(tmp_path: Path) -> None:
@@ -62,8 +94,8 @@ def test_trigger_event_dedup_is_atomic_with_insert_or_ignore(tmp_path: Path) -> 
         },
     )
 
-    assert database.record_trigger_event(event) is True
-    assert database.record_trigger_event(event) is False
+    assert database.record_trigger_event(event).status == "created"
+    assert database.record_trigger_event(event).status == "duplicate"
 
     recent = database.list_recent_trigger_events()
     assert len(recent) == 1
@@ -97,6 +129,76 @@ def test_pending_reply_roundtrip(tmp_path: Path) -> None:
     assert sent is not None
     assert sent.status == "sent"
     assert sent.reply_post_id == 99
+
+
+def test_trigger_event_merges_same_topic_different_notifications(tmp_path: Path) -> None:
+    database = Database(tmp_path / "merge.sqlite3")
+    database.initialize()
+
+    first = database.record_trigger_event(
+        cast(
+            dict[str, object],
+            {"topic_id": 7, "reason": "notification", "source": "notification_worker", "notification_id": 99},
+        )
+    )
+    second = database.record_trigger_event(
+        cast(
+            dict[str, object],
+            {"topic_id": 7, "reason": "notification", "source": "notification_worker", "notification_id": 100},
+        )
+    )
+
+    assert first.status == "created"
+    assert second.status == "merged"
+    pending = database.list_unprocessed_events()
+    assert len(pending) == 1
+    assert pending[0]["payload"]["merged_event_count"] == 2
+
+
+def test_trigger_event_blocked_when_topic_has_pending_reply(tmp_path: Path) -> None:
+    database = Database(tmp_path / "pending-block.sqlite3")
+    database.initialize()
+    _ = database.create_pending_reply(
+        topic_id=7,
+        topic_title="topic",
+        trigger_reason="notification",
+        target_post_number=3,
+        draft_content="meow",
+        decision={"should_reply": True, "reason": "test"},
+    )
+
+    result = database.record_trigger_event(
+        cast(
+            dict[str, object],
+            {"topic_id": 7, "reason": "notification", "source": "notification_worker", "notification_id": 99},
+        )
+    )
+
+    assert result.status == "blocked_pending"
+    assert database.list_unprocessed_events() == []
+
+
+def test_create_pending_reply_rejects_second_pending_for_same_topic(tmp_path: Path) -> None:
+    database = Database(tmp_path / "pending-unique.sqlite3")
+    database.initialize()
+    _ = database.create_pending_reply(
+        topic_id=7,
+        topic_title="topic",
+        trigger_reason="notification",
+        target_post_number=3,
+        draft_content="meow",
+        decision={"should_reply": True, "reason": "test"},
+    )
+
+    with pytest.raises(RuntimeError, match="pending reply already exists"):
+        _ = database.create_pending_reply(
+            topic_id=7,
+            topic_title="topic",
+            trigger_reason="notification",
+            target_post_number=4,
+            draft_content="meow2",
+            decision={"should_reply": True, "reason": "test2"},
+        )
 
 
 def test_initialize_retries_after_transient_sqlite_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
