@@ -178,3 +178,21 @@ async def test_request_notifications_403_relogins_when_session_probe_returns_404
         "GET /session/current.json",
         "GET /notifications.json",
     ]
+
+
+@pytest.mark.anyio
+async def test_request_includes_response_body_preview_in_http_status_error() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, text='{"errors":["Body is too short"]}', request=request)
+
+    client = _make_client(transport=httpx.MockTransport(handler))
+
+    try:
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await client.request("POST", "/posts.json", retry_on_auth=False, json={"raw": "hi"})
+    finally:
+        await client.aclose()
+
+    message = str(exc_info.value)
+    assert "response body:" in message
+    assert "Body is too short" in message

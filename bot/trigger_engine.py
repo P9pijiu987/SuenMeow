@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 
 class TriggerEngine:
+    MAX_API_EVENT_FAILURES = 2
+
     def __init__(self, settings: Settings, database: Database) -> None:
         self.settings = settings
         self.database = database
@@ -181,8 +183,20 @@ class TriggerEngine:
                 continue
             try:
                 result = await self.pipeline.process_event(self.forum_client, event["payload"], event_id=int(event["id"]))
-            except Exception:
-                logger.exception("trigger event processing failed; event_id=%s", event["id"])
+            except Exception as exc:
+                failure_count = self.database.record_event_failure(int(event["id"]), str(exc))
+                logger.exception(
+                    "trigger event processing failed; event_id=%s failure_count=%s",
+                    event["id"],
+                    failure_count,
+                )
+                if failure_count >= self.MAX_API_EVENT_FAILURES:
+                    self.database.mark_event_processed(int(event["id"]))
+                    logger.warning(
+                        "trigger event reached retry limit and will not be retried again; event_id=%s failure_count=%s",
+                        event["id"],
+                        failure_count,
+                    )
                 continue
             self.database.mark_event_processed(int(event["id"]))
             if result is not None:
