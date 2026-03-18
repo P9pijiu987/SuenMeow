@@ -8,6 +8,15 @@ services:
       - suenmeow_data:/app/data
       - ./logs:/app/logs
 
+  suenmeow-public-web:
+    restart: always
+    environment:
+      SUENMEOW_ENV: production
+    volumes:
+      - ./config:/app/config:ro
+      - suenmeow_data:/app/data
+      - ./logs:/app/logs
+
   suenmeow-worker:
     restart: always
     environment:

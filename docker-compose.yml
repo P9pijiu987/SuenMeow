@@ -30,6 +30,25 @@ services:
       retries: 3
       start_period: 10s
 
+  suenmeow-public-web:
+    <<: *suenmeow-common
+    container_name: suenmeow-public-web
+    command: ["python", "main.py", "public-web", "--root", "/app"]
+    ports:
+      - "${SUENMEOW_PUBLIC_WEB_PORT:-8001}:8001"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "from urllib.request import urlopen; import sys; sys.exit(0 if urlopen('http://127.0.0.1:8001/health', timeout=2).status == 200 else 1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   suenmeow-worker:
     <<: *suenmeow-common
     container_name: suenmeow-worker

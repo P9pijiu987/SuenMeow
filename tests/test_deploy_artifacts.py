@@ -31,10 +31,11 @@ def test_prod_compose_makes_config_read_only() -> None:
     compose = (ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
 
     assert "suenmeow-web:" in compose
+    assert "suenmeow-public-web:" in compose
     assert "suenmeow-worker:" in compose
     assert "SUENMEOW_ENV: production" in compose
-    assert compose.count("./config:/app/config:ro") == 2
-    assert compose.count("suenmeow_data:/app/data") == 2
+    assert compose.count("./config:/app/config:ro") == 3
+    assert compose.count("suenmeow_data:/app/data") == 3
 
 
 def test_webui_default_host_is_container_friendly() -> None:
