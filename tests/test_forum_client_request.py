@@ -87,8 +87,6 @@ async def test_request_notifications_403_rechecks_session_and_relogins_once(monk
             if calls.count("GET /notifications.json") == 1:
                 return httpx.Response(403, text="forbidden", request=request)
             return httpx.Response(200, json={"notifications": []}, request=request)
-        if request.url.path == "/session/current.json":
-            return httpx.Response(200, json={"current_user": None}, request=request)
         return httpx.Response(500, request=request)
 
     client = _make_client(transport=httpx.MockTransport(handler))
@@ -108,7 +106,6 @@ async def test_request_notifications_403_rechecks_session_and_relogins_once(monk
     assert login_calls == ["login"]
     assert calls == [
         "GET /notifications.json",
-        "GET /session/current.json",
         "GET /notifications.json",
     ]
 
@@ -123,8 +120,6 @@ async def test_request_notifications_403_retry_uses_fresh_csrf_token(monkeypatch
             if len(request_headers) == 1:
                 return httpx.Response(403, text="forbidden", request=request)
             return httpx.Response(200, json={"notifications": []}, request=request)
-        if request.url.path == "/session/current.json":
-            return httpx.Response(404, json={"error": "not found"}, request=request)
         return httpx.Response(500, request=request)
 
     client = _make_client(transport=httpx.MockTransport(handler))
@@ -154,8 +149,6 @@ async def test_request_notifications_403_relogins_when_session_probe_returns_404
             if calls.count("GET /notifications.json") == 1:
                 return httpx.Response(403, text="forbidden", request=request)
             return httpx.Response(200, json={"notifications": []}, request=request)
-        if request.url.path == "/session/current.json":
-            return httpx.Response(404, json={"error": "not found"}, request=request)
         return httpx.Response(500, request=request)
 
     client = _make_client(transport=httpx.MockTransport(handler))
@@ -175,9 +168,39 @@ async def test_request_notifications_403_relogins_when_session_probe_returns_404
     assert login_calls == ["login"]
     assert calls == [
         "GET /notifications.json",
-        "GET /session/current.json",
         "GET /notifications.json",
     ]
+
+
+@pytest.mark.anyio
+async def test_request_retries_once_on_401_without_session_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(f"{request.method} {request.url.path}")
+        if request.url.path == "/posts.json":
+            if calls.count("POST /posts.json") == 1:
+                return httpx.Response(401, text="unauthorized", request=request)
+            return httpx.Response(200, json={"id": 123}, request=request)
+        return httpx.Response(500, request=request)
+
+    client = _make_client(transport=httpx.MockTransport(handler))
+    login_calls: list[str] = []
+
+    async def fake_login() -> None:
+        login_calls.append("login")
+        client.csrf_token = "fresh-token"
+
+    monkeypatch.setattr(client, "login", fake_login)
+
+    try:
+        response = await client.request("POST", "/posts.json", json={"raw": "hi"})
+    finally:
+        await client.aclose()
+
+    assert response.status_code == 200
+    assert login_calls == ["login"]
+    assert calls == ["POST /posts.json", "POST /posts.json"]
 
 
 @pytest.mark.anyio

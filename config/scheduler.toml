@@ -1,5 +1,9 @@
 [polling]
 notification_interval_seconds = 5
+# Deprecated: kept for compatibility with older config schema.
+# Hot-topic scans are now unified in ActivityWorker.
 burst_scan_interval_seconds = 60
+# Deprecated: kept for compatibility with older config schema.
 hourly_scan_interval_seconds = 3600
+# Deprecated: kept for compatibility with older config schema.
 nightly_memory_hour = 0

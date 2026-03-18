@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from datetime import datetime
 from datetime import timedelta
@@ -27,6 +28,9 @@ from db.repositories import Database
 
 ForumPost = dict[str, object]
 RouteDescription = dict[str, str]
+
+
+logger = logging.getLogger(__name__)
 
 
 class PromptBundle(TypedDict):
@@ -169,32 +173,39 @@ class Pipeline:
         if value is None:
             return None
         if isinstance(value, bool):
-            hour = 1 if value else 0
-        elif isinstance(value, int):
+            logger.warning("invalid blackout hour value: bool is not allowed; value=%s", value)
+            return None
+        if isinstance(value, int):
             hour = value
         elif isinstance(value, str):
             try:
                 hour = int(value)
             except ValueError:
+                logger.warning("invalid blackout hour value: not numeric; value=%s", value)
                 return None
         else:
+            logger.warning("invalid blackout hour value type; value=%r", value)
             return None
         if 0 <= hour <= 23:
             return hour
+        logger.warning("invalid blackout hour value range; value=%s", hour)
         return None
 
     @staticmethod
     def _normalize_non_negative_minutes(value: object) -> int:
         if isinstance(value, bool):
-            minutes = 1 if value else 0
-        elif isinstance(value, int):
+            logger.warning("invalid cooldown minutes value: bool is not allowed; value=%s", value)
+            return 0
+        if isinstance(value, int):
             minutes = value
         elif isinstance(value, str):
             try:
                 minutes = int(value)
             except ValueError:
+                logger.warning("invalid cooldown minutes value: not numeric; value=%s", value)
                 return 0
         else:
+            logger.warning("invalid cooldown minutes value type; value=%r", value)
             return 0
         return max(0, minutes)
 
@@ -664,7 +675,7 @@ class Pipeline:
 
     async def process_event(
         self, forum_client: ForumClient, event: dict[str, object], event_id: int | None = None
-    ) -> ProcessEventResult | None:
+    ) -> ProcessEventResult:
         topic_id_value = event["topic_id"]
         topic_id = topic_id_value if isinstance(topic_id_value, int) else int(str(topic_id_value))
         trigger_reason_value = event["reason"]
@@ -730,17 +741,15 @@ class Pipeline:
             raw_text = post.get("raw_text", "")
             if self.ban_service.contains_ban_command(raw_text if isinstance(raw_text, str) else ""):
                 self.database.add_topic_ban(topic_id, "ban command detected")
-                # Ban is terminal for this topic, so the run is persisted before returning.
-                self.database.record_pipeline_run(
+                return self._record_short_circuit_run(
                     event_id=event_id,
                     topic_id=topic_id,
                     topic_title=topic_title,
                     trigger_reason=trigger_reason,
+                    highest_post_number=highest_post_number,
                     action="banned",
-                    decision={"should_reply": False, "reason": "ban command detected"},
-                    draft_content="",
+                    reason="ban command detected",
                 )
-                return None
         result = await self.dry_run(topic_id, posts, trigger_reason)
         self.database.note_topic_seen(topic_id, highest_post_number)
         action = "reply" if result["decision"].should_reply else "skip"

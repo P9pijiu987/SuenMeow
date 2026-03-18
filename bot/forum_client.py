@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
+from email.utils import parsedate_to_datetime
+import logging
 import re
 from typing import Any
 
@@ -13,6 +17,9 @@ from bot.settings import CredentialsConfig, ForumConfig
 HTML_TAG_RE = re.compile(r"<[^>]+>")
 HTML_BREAK_RE = re.compile(r"<(?:br|/p|/div|/li|/blockquote|/h[1-6])[^>]*>", re.IGNORECASE)
 WHITESPACE_RE = re.compile(r"\s+")
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -99,51 +106,71 @@ class ForumClient:
         response.raise_for_status()
 
     @staticmethod
-    def _is_notifications_request(path: str) -> bool:
-        return path.startswith("/notifications.json")
-
-    async def _is_session_authenticated(self) -> bool:
-        response = await self.client.request(
-            "GET",
-            f"{self.forum.base_url}/session/current.json",
-            headers={"accept": "application/json"},
-        )
-        if response.status_code in {401, 403, 404}:
-            return False
-        if response.status_code >= 400:
-            return True
+    def _parse_retry_after_seconds(retry_after: str | None) -> float:
+        if retry_after is None:
+            return 2.0
+        stripped = retry_after.strip()
+        if not stripped:
+            return 2.0
         try:
-            payload = response.json()
+            return max(0.0, float(stripped))
         except ValueError:
-            return True
-        return payload.get("current_user") is not None
+            pass
+        try:
+            parsed = parsedate_to_datetime(stripped)
+        except (TypeError, ValueError):
+            return 2.0
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return max(0.0, (parsed.astimezone(timezone.utc) - now).total_seconds())
 
     async def request(self, method: str, path: str, *, retry_on_auth: bool = True, **kwargs: Any) -> httpx.Response:
         url = path if path.startswith("http") else f"{self.forum.base_url}{path}"
         headers = dict(kwargs.pop("headers", {}))
-        if self.csrf_token:
-            headers["x-csrf-token"] = self.csrf_token
-        response = await self.client.request(method, url, headers=headers, **kwargs)
-        if response.status_code == 429:
-            retry_after = response.headers.get("Retry-After")
-            wait_seconds = float(retry_after) if retry_after and retry_after.replace(".", "", 1).isdigit() else 2.0
-            await response.aclose()
-            await asyncio.sleep(wait_seconds)
-            response = await self.client.request(method, url, headers=headers, **kwargs)
-        if retry_on_auth and response.status_code in {401, 403} and "BAD CSRF" in response.text.upper():
-            await response.aclose()
-            await self.login()
-            headers.pop("x-csrf-token", None)
-            return await self.request(method, path, retry_on_auth=False, headers=headers, **kwargs)
-        if retry_on_auth and (
-            response.status_code == 401
-            or (response.status_code == 403 and self._is_notifications_request(path))
-        ):
-            if await self._is_session_authenticated() is False:
+        auth_retries_remaining = 1 if retry_on_auth else 0
+        rate_retries_remaining = 1
+        attempt = 1
+
+        while True:
+            request_headers = dict(headers)
+            if self.csrf_token and "x-csrf-token" not in request_headers:
+                request_headers["x-csrf-token"] = self.csrf_token
+            response = await self.client.request(method, url, headers=request_headers, **kwargs)
+
+            if response.status_code == 429 and rate_retries_remaining > 0:
+                retry_after = response.headers.get("Retry-After")
+                wait_seconds = self._parse_retry_after_seconds(retry_after)
+                logger.warning(
+                    "forum request rate limited; method=%s path=%s attempt=%s wait_seconds=%s",
+                    method,
+                    path,
+                    attempt,
+                    wait_seconds,
+                )
+                rate_retries_remaining -= 1
+                attempt += 1
+                await response.aclose()
+                await asyncio.sleep(wait_seconds)
+                continue
+
+            if retry_on_auth and response.status_code in {401, 403} and auth_retries_remaining > 0:
+                logger.warning(
+                    "forum request unauthorized; relogin and retry; method=%s path=%s attempt=%s status_code=%s",
+                    method,
+                    path,
+                    attempt,
+                    response.status_code,
+                )
+                auth_retries_remaining -= 1
+                attempt += 1
                 await response.aclose()
                 await self.login()
                 headers.pop("x-csrf-token", None)
-                return await self.request(method, path, retry_on_auth=False, headers=headers, **kwargs)
+                continue
+
+            break
+
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -167,7 +194,7 @@ class ForumClient:
 
     async def list_latest_topics(self, page: int = 0) -> list[dict[str, Any]]:
         suffix = f"?page={page}" if page else ""
-        response = await self.request("GET", f"/latest.json{suffix}", retry_on_auth=False)
+        response = await self.request("GET", f"/latest.json{suffix}")
         payload = response.json()
         return payload.get("topic_list", {}).get("topics", [])
 

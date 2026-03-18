@@ -671,6 +671,58 @@ async def test_process_event_skips_when_topic_already_has_pending_reply(tmp_path
 
 
 @pytest.mark.anyio
+async def test_process_event_marks_ban_as_structured_short_circuit(tmp_path: Path) -> None:
+    decision = PlannerDecision(
+        should_reply=True,
+        priority="normal",
+        target_username="bob",
+        target_post_number=5,
+        reason="reply due to notification",
+        style_notes="concise",
+        memory_action="none",
+    )
+    pipeline = _make_pipeline(
+        tmp_path,
+        allow_send_reply=True,
+        decision=decision,
+        require_approval_before_send=True,
+    )
+
+    class _BanForumClient(FakeForumClient):
+        @override
+        async def get_topic_selected_posts(
+            self,
+            topic_id: int,
+            *,
+            include_first_post: bool = True,
+            recent_post_limit: int = 50,
+        ) -> list[dict[str, object]]:
+            _ = topic_id
+            _ = include_first_post
+            _ = recent_post_limit
+            return [
+                {"post_number": 1, "username": "alice", "reply_to_post_number": 0, "raw_text": "first post"},
+                {
+                    "post_number": 2,
+                    "username": "bob",
+                    "reply_to_post_number": 1,
+                    "raw_text": "/ban @SuenMeow",
+                },
+            ]
+
+    forum_client = _BanForumClient(read_only=False)
+
+    result = await pipeline.process_event(forum_client, {"topic_id": 123, "reason": "notification"}, event_id=7)
+
+    assert result is not None
+    assert result["action"] == "banned"
+    assert result["decision"]["should_reply"] is False
+    assert result["decision"]["reason"] == "ban command detected"
+    runs = pipeline.database.list_recent_pipeline_runs()
+    assert runs[0]["action"] == "banned"
+
+
+@pytest.mark.anyio
 async def test_process_event_uses_shadow_reply_without_sending_or_queueing(tmp_path: Path) -> None:
     decision = PlannerDecision(
         should_reply=True,
