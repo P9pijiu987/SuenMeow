@@ -15,7 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="SuenMeow service entrypoint")
     parser.add_argument(
         "command",
-        choices=("run-once", "worker", "web", "init-db", "debug-topics"),
+        choices=("run-once", "worker", "web", "public-web", "init-db", "debug-topics"),
         help="Execution mode",
     )
     parser.add_argument(
@@ -72,10 +72,17 @@ def main() -> None:
     configure_logging(root / "logs")
 
     if args.command == "web":
-        app = create_app(root)
+        app = create_app(root, app_mode="admin")
         import uvicorn
 
         uvicorn.run(app, host=app.state.settings.webui.host, port=app.state.settings.webui.port)
+        return
+
+    if args.command == "public-web":
+        app = create_app(root, app_mode="public")
+        import uvicorn
+
+        uvicorn.run(app, host=app.state.settings.webui.public_host, port=app.state.settings.webui.public_port)
         return
 
     if args.command == "init-db":

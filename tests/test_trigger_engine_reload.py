@@ -97,7 +97,7 @@ def _write_config(
         encoding="utf-8",
     )
     _ = (config_dir / "webui.toml").write_text(
-        "host='127.0.0.1'\nport=5000\nenable_auth=false\nshow_aigc_logs=true\n",
+        "host='127.0.0.1'\nport=5000\nenable_auth=false\nshow_aigc_logs=true\npublic_host='127.0.0.1'\npublic_port=8001\n",
         encoding="utf-8",
     )
     runtime_toml = (
@@ -209,7 +209,6 @@ async def test_trigger_engine_reload_updates_runtime_settings_without_recreating
         assert engine.budget_service.daily_token_budget == 999
         assert engine.budget_service.topic_token_budget == 222
         assert engine.activity_worker.thresholds.context.planner_max_posts == 25
-        assert engine.hourly_worker.thresholds.context.replyer_max_posts == 12
         assert engine.llm_client.models["planner"].model == "planner-v2"
     finally:
         await engine.forum_client.aclose()
@@ -233,6 +232,5 @@ async def test_trigger_engine_reload_recreates_forum_client_when_forum_settings_
         assert engine.forum_client.forum.base_url == "https://forum-two.example.com"
         assert engine.notification_worker.forum_client is engine.forum_client
         assert engine.activity_worker.forum_client is engine.forum_client
-        assert engine.hourly_worker.forum_client is engine.forum_client
     finally:
         await engine.forum_client.aclose()

@@ -38,7 +38,7 @@ def _write_config(root: Path) -> None:
         encoding="utf-8",
     )
     _ = (config_dir / "webui.toml").write_text(
-        "host='127.0.0.1'\nport=8000\nenable_auth=false\nshow_aigc_logs=true\n",
+        "host='127.0.0.1'\nport=8000\nenable_auth=false\nshow_aigc_logs=true\npublic_host='127.0.0.1'\npublic_port=8001\n",
         encoding="utf-8",
     )
     _ = (config_dir / "runtime.toml").write_text(

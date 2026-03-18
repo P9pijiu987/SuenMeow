@@ -48,7 +48,7 @@ def _write_config(
         encoding="utf-8",
     )
     _ = (config_dir / "webui.toml").write_text(
-        "host='127.0.0.1'\nport=8000\nenable_auth=false\nshow_aigc_logs=true\n",
+        "host='127.0.0.1'\nport=8000\nenable_auth=false\nshow_aigc_logs=true\npublic_host='127.0.0.1'\npublic_port=8001\n",
         encoding="utf-8",
     )
     runtime_toml = (
@@ -524,6 +524,72 @@ def test_homepage_renders_real_chinese_admin_page(tmp_path: Path) -> None:
     assert "/config/editable/" in text
     assert "core.md" in text
     assert "/memory/user/" in text
+
+
+def test_public_editor_routes_support_readonly_builtin_and_writable_public(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path, app_mode="public")
+    client = TestClient(app)
+
+    config_res = client.get("/public/config")
+    assert config_res.status_code == 200
+    cfg = config_res.json()
+    assert "planner.md" in cfg["prompt_builtin"]
+    assert "core.md" in cfg["persona_builtin"]
+
+    builtin_read = client.get("/public/prompts/planner.md")
+    assert builtin_read.status_code == 200
+    assert builtin_read.json()["readonly"] is True
+
+    readonly_write = client.put("/public/prompts/planner.md", json={"content": "hacked"})
+    assert readonly_write.status_code == 403
+
+    write_new = client.put("/public/prompts/custom_public.md", json={"content": "public custom"})
+    assert write_new.status_code == 200
+    assert write_new.json()["stored_in"] == "prompts_public"
+
+    read_new = client.get("/public/prompts/custom_public.md")
+    assert read_new.status_code == 200
+    assert read_new.json()["readonly"] is False
+
+
+def test_public_editor_memory_is_readonly(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path, app_mode="public")
+    client = TestClient(app)
+    data = client.get("/public/memory")
+    assert data.status_code == 200
+    assert "self_memory" in data.json()
+
+
+def test_admin_login_required_when_enable_auth_true(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    auth_file = tmp_path / "config" / "webui_admin_auth.toml"
+    _ = auth_file.write_text("username='admin'\npassword='secret'\n", encoding="utf-8")
+    webui_file = tmp_path / "config" / "webui.toml"
+    _ = webui_file.write_text(
+        "host='127.0.0.1'\nport=8000\nenable_auth=true\nshow_aigc_logs=true\npublic_host='127.0.0.1'\npublic_port=8001\n",
+        encoding="utf-8",
+    )
+
+    app = create_app(tmp_path, app_mode="admin")
+    client = TestClient(app)
+
+    redirected = client.get("/", follow_redirects=False)
+    assert redirected.status_code == 302
+    assert redirected.headers["location"] == "/login"
+
+    login_failed = client.post("/login", data={"username": "admin", "password": "wrong"}, follow_redirects=False)
+    assert login_failed.status_code == 302
+    assert login_failed.headers["location"] == "/login"
+
+    login_ok = client.post("/login", data={"username": "admin", "password": "secret"}, follow_redirects=False)
+    assert login_ok.status_code == 302
+    assert login_ok.headers["location"] == "/"
+
+    home = client.get("/")
+    assert home.status_code == 200
+    text = home.text
     assert "/logs/latest?lines=200" in text
     assert "/topics/runs" in text
 

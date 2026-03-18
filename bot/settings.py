@@ -14,6 +14,8 @@ DEFAULT_PLANNER_PROMPT_MODULES = ("planner.md", "safety_rules.md")
 DEFAULT_REPLYER_PROMPT_MODULES = ("replyer.md", "style_rules.md", "safety_rules.md")
 DEFAULT_MEMORY_PROMPT_MODULES = ("memory_user_update.md", "memory_self_update.md")
 PROMPT_MODULES_CONFIG_FILENAME = "prompt_modules.toml"
+PUBLIC_PROMPTS_DIRNAME = "prompts_public"
+PUBLIC_PERSONAS_DIRNAME = "personas_public"
 EDITABLE_CONFIG_FILENAMES = (
     "forum.toml",
     "models.toml",
@@ -114,8 +116,12 @@ class ThresholdsConfig:
 @dataclass(slots=True)
 class PollingConfig:
     notification_interval_seconds: int
+    # Deprecated: kept only for backward-compatible config parsing.
+    # Runtime scanning for hot-topic behavior is now unified in ActivityWorker.
     burst_scan_interval_seconds: int
+    # Deprecated: kept only for backward-compatible config parsing.
     hourly_scan_interval_seconds: int
+    # Deprecated: kept only for backward-compatible config parsing.
     nightly_memory_hour: int
 
 
@@ -125,6 +131,8 @@ class WebUiConfig:
     port: int
     enable_auth: bool
     show_aigc_logs: bool
+    public_host: str = "0.0.0.0"
+    public_port: int = 8001
 
 
 @dataclass(slots=True)
@@ -212,9 +220,13 @@ def _default_prompt_route_config(names: tuple[str, ...]) -> PromptRouteConfig:
 def available_module_files(paths: AppPaths) -> set[str]:
     prompt_dir = paths.root / "prompts"
     persona_dir = paths.root / "personas"
+    public_prompt_dir = paths.root / PUBLIC_PROMPTS_DIRNAME
+    public_persona_dir = paths.root / PUBLIC_PERSONAS_DIRNAME
     return {
         *(path.name for path in prompt_dir.glob("*.md")),
         *(path.name for path in persona_dir.glob("*.md")),
+        *(path.name for path in public_prompt_dir.glob("*.md")),
+        *(path.name for path in public_persona_dir.glob("*.md")),
     }
 
 

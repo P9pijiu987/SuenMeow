@@ -12,6 +12,7 @@ logs/
 # Local secrets
 config/credentials.toml
 config/providers.toml
+config/webui_admin_auth.toml
 .env
 
 # Windows oddities

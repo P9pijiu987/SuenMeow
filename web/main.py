@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import secrets
+from urllib.parse import parse_qs
 
 from fastapi import FastAPI
+from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
+from fastapi.responses import RedirectResponse
 
 from bot.logging_utils import configure_logging
 from bot.approval_service import ApprovalService
@@ -15,10 +19,16 @@ from web.routes.logs import router as logs_router
 from web.routes.memory import router as memory_router
 from web.routes.personas import router as personas_router
 from web.routes.prompts import router as prompts_router
+from web.routes.public_editor import router as public_editor_router
 from web.routes.topics import router as topics_router
+from web.security import verify_admin_credentials
+from web.security import AUTH_COOKIE_NAME
+from web.security import is_admin_logged_in
 
 
-def create_app(root: Path) -> FastAPI:
+def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
+    if app_mode not in {"admin", "public"}:
+        raise ValueError(f"unknown app mode: {app_mode}")
     paths = AppPaths.from_root(root)
     configure_logging(paths.log_dir)
     settings = load_settings(paths)
@@ -38,6 +48,53 @@ def create_app(root: Path) -> FastAPI:
     app.state.settings = settings
     app.state.database = database
     app.state.approval_service = ApprovalService(database, settings)
+    app.state.admin_session_token = secrets.token_urlsafe(32)
+
+    @app.middleware("http")
+    async def admin_auth_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
+        if app_mode == "public":
+            if request.url.path.startswith("/public") or request.url.path == "/health":
+                return await call_next(request)
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
+        current_settings = request.app.state.settings
+        if not current_settings.webui.enable_auth:
+            return await call_next(request)
+        if request.url.path.startswith("/public"):
+            return await call_next(request)
+        if request.url.path in {"/health", "/login"} or request.url.path.startswith("/openapi") or request.url.path.startswith("/docs"):
+            return await call_next(request)
+        if is_admin_logged_in(request):
+            return await call_next(request)
+        return RedirectResponse(url="/login", status_code=302)
+
+    @app.get("/login", summary="管理员登录", response_class=HTMLResponse)
+    def login_page() -> str:
+        return """
+<!doctype html>
+<html lang=\"zh-CN\">
+<head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Admin Login</title>
+<style>body{font-family:'Microsoft YaHei',sans-serif;background:#f6f7fb;display:flex;justify-content:center;padding-top:80px;} .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px;width:360px;} input{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;margin-top:8px;} button{margin-top:12px;width:100%;padding:10px;border:0;background:#2563eb;color:#fff;border-radius:8px;} .hint{color:#6b7280;font-size:12px;line-height:1.6;margin-top:8px;}</style>
+</head>
+<body><div class=\"card\"><h2>管理后台登录</h2><form method=\"post\" action=\"/login\"><label>用户名</label><input name=\"username\"/><label>密码</label><input name=\"password\" type=\"password\"/><button type=\"submit\">登录</button></form><div class=\"hint\">账号密码读取自本地 <code>config/webui_admin_auth.toml</code>。<b>不要上传到 GitHub</b>。</div></div></body></html>
+"""
+
+    @app.post("/login", summary="提交管理员登录")
+    async def login_submit(request: Request) -> RedirectResponse:
+        body = (await request.body()).decode("utf-8", errors="ignore")
+        parsed = parse_qs(body)
+        username = (parsed.get("username") or [""])[0]
+        password = (parsed.get("password") or [""])[0]
+        if not verify_admin_credentials(paths.root, username, password):
+            return RedirectResponse(url="/login", status_code=302)
+        response = RedirectResponse(url="/", status_code=302)
+        response.set_cookie(AUTH_COOKIE_NAME, app.state.admin_session_token, httponly=True, samesite="lax")
+        return response
+
+    @app.post("/logout", summary="登出")
+    def logout() -> RedirectResponse:
+        response = RedirectResponse(url="/login", status_code=302)
+        response.delete_cookie(AUTH_COOKIE_NAME)
+        return response
 
     @app.get("/", summary="首页", response_class=HTMLResponse)
     def index() -> str:
@@ -210,6 +267,7 @@ def create_app(root: Path) -> FastAPI:
     <div class="links">
       <a href="/docs" target="_blank">Swagger 文档</a>
       <a href="/openapi.json" target="_blank">OpenAPI</a>
+      <form method="post" action="/logout" style="display:inline;"><button type="submit" class="secondary" style="padding:4px 8px;">退出</button></form>
     </div>
   </header>
 
@@ -1119,4 +1177,5 @@ def create_app(root: Path) -> FastAPI:
     app.include_router(memory_router)
     app.include_router(topics_router)
     app.include_router(logs_router)
+    app.include_router(public_editor_router)
     return app

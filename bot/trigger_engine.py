@@ -12,7 +12,6 @@ from bot.ban_service import BanService
 from bot.budget_service import BudgetService
 from bot.context_builder import ContextBuilder
 from bot.forum_client import ForumClient
-from bot.hourly_scan_worker import HourlyScanWorker
 from bot.llm_client import LlmClient
 from bot.memory_service import MemoryService
 from bot.notification_worker import NotificationWorker
@@ -24,6 +23,8 @@ from bot.planner import Planner
 from bot.prompt_loader import PromptLoader
 from bot.replyer import Replyer
 from bot.settings import load_settings
+from bot.settings import PUBLIC_PERSONAS_DIRNAME
+from bot.settings import PUBLIC_PROMPTS_DIRNAME
 from bot.settings import Settings
 from db.repositories import Database
 
@@ -48,7 +49,6 @@ class TriggerEngine:
             mark_notifications_read=settings.runtime.mark_notifications_read,
         )
         self.activity_worker = ActivityWorker(self.forum_client, self.database, settings.thresholds)
-        self.hourly_worker = HourlyScanWorker(self.forum_client, self.database, settings.thresholds)
         self.budget_service = BudgetService(
             daily_token_budget=settings.thresholds.budget.daily_token_budget,
             topic_token_budget=settings.thresholds.budget.topic_token_budget,
@@ -62,8 +62,14 @@ class TriggerEngine:
             ),
             planner=Planner(),
             replyer=Replyer(),
-            persona_loader=PersonaLoader(settings.paths.root / "personas"),
-            prompt_loader=PromptLoader(settings.paths.root / "prompts"),
+            persona_loader=PersonaLoader(
+                settings.paths.root / "personas",
+                extra_persona_dirs=[settings.paths.root / PUBLIC_PERSONAS_DIRNAME],
+            ),
+            prompt_loader=PromptLoader(
+                settings.paths.root / "prompts",
+                extra_prompt_dirs=[settings.paths.root / PUBLIC_PROMPTS_DIRNAME],
+            ),
             llm_client=self.llm_client,
             ban_service=BanService(settings.credentials.username),
             database=self.database,
@@ -129,7 +135,6 @@ class TriggerEngine:
         self.forum_client.read_only = new_settings.runtime.read_only
         self.notification_worker.mark_notifications_read = new_settings.runtime.mark_notifications_read
         self.activity_worker.thresholds = new_settings.thresholds
-        self.hourly_worker.thresholds = new_settings.thresholds
         self.budget_service.daily_token_budget = new_settings.thresholds.budget.daily_token_budget
         self.budget_service.topic_token_budget = new_settings.thresholds.budget.topic_token_budget
         self.llm_client.providers = new_settings.providers
@@ -159,7 +164,6 @@ class TriggerEngine:
         )
         self.notification_worker.forum_client = self.forum_client
         self.activity_worker.forum_client = self.forum_client
-        self.hourly_worker.forum_client = self.forum_client
         self._is_logged_in = False
 
     async def _ensure_logged_in(self) -> None:
@@ -229,14 +233,12 @@ class TriggerEngine:
         await self._ensure_logged_in()
         notification_events = await self.notification_worker.scan()
         activity_events = await self.activity_worker.scan()
-        hourly_events = await self.hourly_worker.scan()
         processed_events = await self._process_pending_events()
         logger.info(
-            "trigger pass complete: read_only=%s notifications=%s activity=%s hourly=%s processed=%s",
+            "trigger pass complete: read_only=%s notifications=%s activity=%s processed=%s",
             self.settings.runtime.read_only,
             len(notification_events),
             len(activity_events),
-            len(hourly_events),
             len(processed_events),
         )
 

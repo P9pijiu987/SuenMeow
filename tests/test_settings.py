@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from bot.settings import AppPaths, load_settings
+from bot.settings import available_module_files
 
 
 def _write_prompt_and_persona_files(root: Path) -> None:
@@ -53,7 +54,10 @@ def _write_base_config(root: Path) -> Path:
         "[polling]\nnotification_interval_seconds=5\nburst_scan_interval_seconds=60\nhourly_scan_interval_seconds=3600\nnightly_memory_hour=0\n",
         encoding="utf-8",
     )
-    _ = (config_dir / "webui.toml").write_text("host='127.0.0.1'\nport=8000\nenable_auth=false\nshow_aigc_logs=true\n", encoding="utf-8")
+    _ = (config_dir / "webui.toml").write_text(
+        "host='127.0.0.1'\nport=8000\nenable_auth=false\nshow_aigc_logs=true\npublic_host='127.0.0.1'\npublic_port=8001\n",
+        encoding="utf-8",
+    )
     _ = (config_dir / "runtime.toml").write_text(runtime_toml, encoding="utf-8")
     _ = (config_dir / "personas.toml").write_text("enabled=['core','catgirl']\n[priority]\ncore=10\ncatgirl=5\n", encoding="utf-8")
     return config_dir
@@ -75,6 +79,8 @@ def test_settings_load_personas(tmp_path: Path) -> None:
     assert settings.runtime.blackout_end_hour == 6
     assert settings.runtime.muted_topic_ids == [123, 456]
     assert settings.runtime.muted_usernames == ["alice", "bob"]
+    assert settings.webui.public_host == "127.0.0.1"
+    assert settings.webui.public_port == 8001
     assert [module.name for module in settings.prompt_modules.planner.modules] == ["planner.md", "safety_rules.md"]
     assert [module.name for module in settings.prompt_modules.replyer.modules] == [
         "replyer.md",
@@ -167,3 +173,16 @@ def test_app_paths_default_to_root_directories_when_env_missing(tmp_path: Path, 
     assert paths.data_dir == root / "data"
     assert paths.log_dir == root / "logs"
     assert paths.database_path == root / "data" / "suenmeow.sqlite3"
+
+
+def test_available_module_files_includes_public_directories(tmp_path: Path) -> None:
+    root = tmp_path
+    _ = _write_base_config(root)
+    _ = (root / "prompts_public").mkdir()
+    _ = (root / "personas_public").mkdir()
+    _ = (root / "prompts_public" / "public_prompt.md").write_text("p", encoding="utf-8")
+    _ = (root / "personas_public" / "public_persona.md").write_text("x", encoding="utf-8")
+
+    files = available_module_files(AppPaths.from_root(root))
+    assert "public_prompt.md" in files
+    assert "public_persona.md" in files
