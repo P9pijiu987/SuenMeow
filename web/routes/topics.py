@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, Request
 
 from bot.trigger_engine import TriggerEngine
 
 
 router = APIRouter(prefix="/topics", tags=["话题"])
+
+
+class BanTopicPayload(BaseModel):
+    reason: str = "banned from webui"
 
 
 @router.get("/banned", summary="查看已封禁话题")
@@ -45,6 +50,14 @@ def topic_states(request: Request) -> dict[str, object]:
 def pending_replies(request: Request) -> dict[str, object]:
     database = request.app.state.database
     return {"items": database.list_pending_replies()}
+
+
+@router.post("/{topic_id}/ban", summary="封禁话题")
+def ban_topic(topic_id: int, payload: BanTopicPayload, request: Request) -> dict[str, object]:
+    database = request.app.state.database
+    reason = payload.reason.strip() or "banned from webui"
+    database.add_topic_ban(topic_id, reason)
+    return {"topic_id": topic_id, "reason": reason, "status": "banned"}
 
 
 @router.post("/pending-replies/{pending_reply_id}/approve", summary="批准发送待处理回复")

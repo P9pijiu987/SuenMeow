@@ -658,6 +658,24 @@ def test_homepage_includes_pipeline_run_trace_panel_script(tmp_path: Path) -> No
     assert "建议回复" in text
     assert "href=\"/topics/runs/${escapeHtml(run.id)}\"" in text
     assert "查看详情" in text
+    assert "memory_command" in text
+    assert "banTopic(" in text
+
+
+def test_homepage_includes_banned_topics_panel_script(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "已封禁话题" in text
+    assert "banned-topics-container" in text
+    assert "async function loadBannedTopics()" in text
+    assert "fetch('/topics/banned')" in text
+    assert "fetch(`/topics/${encodeURIComponent(topicId)}/ban`" in text
 
 
 def test_homepage_includes_pending_approvals_panel_script(tmp_path: Path) -> None:

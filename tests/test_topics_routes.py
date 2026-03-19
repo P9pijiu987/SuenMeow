@@ -240,3 +240,16 @@ def test_topic_debug_route_returns_502_when_backend_debug_fails(tmp_path: Path, 
 
     assert response.status_code == 502
     assert response.json()["detail"] == "topic debug failed: login failed"
+
+
+def test_topics_ban_route_adds_ban_rule(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path)
+    database = cast(Database, app.state.database)
+
+    with TestClient(app) as client:
+        response = client.post("/topics/777/ban", json={"reason": "manual webui ban"})
+
+    assert response.status_code == 200
+    assert response.json() == {"topic_id": 777, "reason": "manual webui ban", "status": "banned"}
+    assert database.is_topic_banned(777) is True

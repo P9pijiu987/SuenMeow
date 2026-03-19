@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -103,6 +104,7 @@ class PlannerLike(Protocol):
 class Pipeline:
     _MEMORY_UPDATE_CONFIDENCE_THRESHOLD = 0.2
     _SELF_MEMORY_UPDATE_CONFIDENCE_THRESHOLD = 0.6
+    _MEMORY_COMMAND_PATTERN = re.compile(r"^\s*/memory\+(?P<content>.+)$", re.IGNORECASE | re.DOTALL)
 
     def __init__(
         self,
@@ -362,6 +364,13 @@ class Pipeline:
         return " ".join(value.split())
 
     @classmethod
+    def _extract_memory_command_content(cls, text: str) -> str | None:
+        match = cls._MEMORY_COMMAND_PATTERN.match(text)
+        if match is None:
+            return None
+        return cls._normalize_memory_text(match.group("content"))
+
+    @classmethod
     def _extract_user_memory_updates(cls, payload: dict[str, object]) -> list[tuple[str, str, float]]:
         raw_updates = payload.get("user_updates")
         if not isinstance(raw_updates, list):
@@ -411,6 +420,58 @@ class Pipeline:
             + f"Relevant user memories:\n{json.dumps(memory_hits, ensure_ascii=False, indent=2, sort_keys=True)}\n\n"
         )
 
+    def _build_memory_command_user_prompt(
+        self,
+        prompt_bundle: PromptBundle,
+        *,
+        command_content: str,
+        command_author: str,
+        topic_id: int,
+    ) -> str:
+        author = command_author.strip() or "(unknown)"
+        return (
+            "Return exactly one JSON object and nothing else.\n"
+            + "Schema:\n"
+            + '{"user_updates": [{"username": "...", "memory": "...", "confidence": 0.0}], "self_update": {"memory": "...", "confidence": 0.0} | null}\n'
+            + "You are processing a direct memory command from a forum thread.\n"
+            + "If the command asks to remember personal user preference/fact, use user_updates.\n"
+            + "If the command asks to update bot behavior/persona/global rules, use self_update.\n"
+            + "Only store durable, high-signal updates. If no change is needed, return {\"user_updates\": [], \"self_update\": null}.\n\n"
+            + f"Topic id: {topic_id}\n"
+            + f"Command author: {author}\n"
+            + f"Command content after /memory+:\n{command_content}\n\n"
+            + f"Current self memory:\n{prompt_bundle['self_memory'] or '(empty)'}\n\n"
+            + f"Current user memories:\n{self._json_block(prompt_bundle['user_memories'])}\n\n"
+            + f"Thread context:\n{prompt_bundle['planner_context']}"
+        )
+
+    def _persist_memory_payload(self, payload: dict[str, object]) -> tuple[int, bool]:
+        updated_user_count = 0
+        extracted_user_updates = self._extract_user_memory_updates(payload)
+        current_user_memories = self.memory_service.get_user_memory([username for username, _, _ in extracted_user_updates])
+        final_user_updates: dict[str, tuple[str, float]] = {}
+        for username, memory_text, confidence in extracted_user_updates:
+            if confidence < self._MEMORY_UPDATE_CONFIDENCE_THRESHOLD:
+                continue
+            current_memory = self._normalize_memory_text(current_user_memories.get(username, ""))
+            if memory_text == current_memory:
+                continue
+            final_user_updates[username] = (memory_text, confidence)
+            current_user_memories[username] = memory_text
+        for username, (memory_text, confidence) in final_user_updates.items():
+            self.memory_service.set_user_memory(username, memory_text, confidence)
+            updated_user_count += 1
+        self_memory_updated = False
+        self_memory_update = self._extract_self_memory_update(payload)
+        if self_memory_update is not None:
+            self_memory_text, self_confidence = self_memory_update
+            if self_confidence >= self._SELF_MEMORY_UPDATE_CONFIDENCE_THRESHOLD:
+                current_self_memory = self._normalize_memory_text(self.memory_service.get_self_memory())
+                if self_memory_text != current_self_memory:
+                    self.memory_service.set_self_memory(self_memory_text)
+                    self_memory_updated = True
+        return updated_user_count, self_memory_updated
+
     def _build_memory_user_prompt(
         self,
         prompt_bundle: PromptBundle,
@@ -448,26 +509,41 @@ class Pipeline:
         payload = self.llm_client.parse_json_object(response.content)
         if not isinstance(payload, dict):
             return
-        extracted_user_updates = self._extract_user_memory_updates(payload)
-        current_user_memories = self.memory_service.get_user_memory([username for username, _, _ in extracted_user_updates])
-        final_user_updates: dict[str, tuple[str, float]] = {}
-        for username, memory_text, confidence in extracted_user_updates:
-            if confidence < self._MEMORY_UPDATE_CONFIDENCE_THRESHOLD:
-                continue
-            current_memory = self._normalize_memory_text(current_user_memories.get(username, ""))
-            if memory_text == current_memory:
-                continue
-            final_user_updates[username] = (memory_text, confidence)
-            current_user_memories[username] = memory_text
-        for username, (memory_text, confidence) in final_user_updates.items():
-            self.memory_service.set_user_memory(username, memory_text, confidence)
-        self_memory_update = self._extract_self_memory_update(payload)
-        if self_memory_update is not None:
-            self_memory_text, self_confidence = self_memory_update
-            if self_confidence >= self._SELF_MEMORY_UPDATE_CONFIDENCE_THRESHOLD:
-                current_self_memory = self._normalize_memory_text(self.memory_service.get_self_memory())
-                if self_memory_text != current_self_memory:
-                    self.memory_service.set_self_memory(self_memory_text)
+        _ = self._persist_memory_payload(payload)
+
+    async def _execute_memory_command(
+        self,
+        *,
+        topic_id: int,
+        posts: list[ForumPost],
+        trigger_reason: str,
+        command_content: str,
+        command_author: str,
+    ) -> str:
+        if self.llm_client is None or not self.llm_client.is_route_available("memory"):
+            return "memory route unavailable"
+        prompt_bundle = self._build_prompt_bundle(topic_id, posts, trigger_reason)
+        memory_user_prompt = self._build_memory_command_user_prompt(
+            prompt_bundle,
+            command_content=command_content,
+            command_author=command_author,
+            topic_id=topic_id,
+        )
+        response = await self.llm_client.chat(
+            "memory",
+            prompt_bundle["memory_system_prompt"],
+            memory_user_prompt,
+            temperature=0.2,
+        )
+        if response is None:
+            return "memory command llm call failed"
+        payload = self.llm_client.parse_json_object(response.content)
+        if not isinstance(payload, dict):
+            return "memory command returned invalid payload"
+        user_updates, self_updated = self._persist_memory_payload(payload)
+        if user_updates == 0 and not self_updated:
+            return "memory command processed with no durable updates"
+        return "memory command processed"
 
     def _build_prompt_bundle(self, topic_id: int, posts: list[ForumPost], trigger_reason: str) -> PromptBundle:
         def unique_names(names: list[str]) -> list[str]:
@@ -683,6 +759,16 @@ class Pipeline:
         topic = await forum_client.get_topic(topic_id)
         topic_title = str(topic.get("title", ""))
         highest_post_number = int(topic.get("highest_post_number") or 0)
+        if self.database.is_topic_banned(topic_id):
+            return self._record_short_circuit_run(
+                event_id=event_id,
+                topic_id=topic_id,
+                topic_title=topic_title,
+                trigger_reason=trigger_reason,
+                highest_post_number=highest_post_number,
+                action="banned",
+                reason="topic is banned",
+            )
         if self.panic_switch:
             return self._record_short_circuit_run(
                 event_id=event_id,
@@ -739,7 +825,8 @@ class Pipeline:
         )
         for post in posts:
             raw_text = post.get("raw_text", "")
-            if self.ban_service.contains_ban_command(raw_text if isinstance(raw_text, str) else ""):
+            raw_text_value = raw_text if isinstance(raw_text, str) else ""
+            if self.ban_service.contains_ban_command(raw_text_value):
                 self.database.add_topic_ban(topic_id, "ban command detected")
                 return self._record_short_circuit_run(
                     event_id=event_id,
@@ -749,6 +836,26 @@ class Pipeline:
                     highest_post_number=highest_post_number,
                     action="banned",
                     reason="ban command detected",
+                )
+            memory_command_content = self._extract_memory_command_content(raw_text_value)
+            if memory_command_content is not None:
+                command_author_value = post.get("username")
+                command_author = command_author_value if isinstance(command_author_value, str) else ""
+                reason = await self._execute_memory_command(
+                    topic_id=topic_id,
+                    posts=posts,
+                    trigger_reason=trigger_reason,
+                    command_content=memory_command_content,
+                    command_author=command_author,
+                )
+                return self._record_short_circuit_run(
+                    event_id=event_id,
+                    topic_id=topic_id,
+                    topic_title=topic_title,
+                    trigger_reason=trigger_reason,
+                    highest_post_number=highest_post_number,
+                    action="memory_command",
+                    reason=reason,
                 )
         result = await self.dry_run(topic_id, posts, trigger_reason)
         self.database.note_topic_seen(topic_id, highest_post_number)

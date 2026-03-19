@@ -449,6 +449,16 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
       </div>
     </section>
 
+    <section class="card col-span-12">
+      <div class="card-header">
+        <h2>🔨 已封禁话题 (Banned Topics)</h2>
+        <button class="secondary" type="button" onclick="loadBannedTopics()" style="padding: 6px 12px; margin: 0;">🔄 刷新</button>
+      </div>
+      <div id="banned-topics-container" style="display: flex; flex-direction: column; gap: 12px; max-height: 280px; overflow-y: auto; padding-right: 4px;">
+        <div class="module-item empty">等待获取封禁列表...</div>
+      </div>
+    </section>
+
     <!-- Row 4: Pipeline Runs -->
     <section class="card col-span-12">
       <div class="card-header">
@@ -973,6 +983,7 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
             'skip': '⏭️ 已跳过',
             'reply_error': '❌ 回复失败',
             'banned': '🔨 已封禁',
+            'memory_command': '🧠 记忆命令',
             'reply': '✉️ 计划回复'
           }};
           const actionText = actionMap[run.action] || run.action;
@@ -1001,6 +1012,7 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
                 <strong style="font-size: 14px;">[${{escapeHtml(run.topic_id)}}] ${{escapeHtml(run.topic_title)}}</strong>
                 <div style="display: flex; gap: 8px; align-items: center;">
                   <span style="font-size: 13px; font-weight: bold; color: ${{actionColor}};">${{escapeHtml(actionText)}}</span>
+                  <button type="button" class="secondary" onclick="banTopic('${{run.topic_id}}', this)" style="padding: 4px 10px; font-size: 12px;">🔨 封禁</button>
                   <a href="/topics/runs/${{escapeHtml(run.id)}}" target="_blank" style="font-size: 12px; color: var(--primary); text-decoration: none;">查看详情</a>
                 </div>
               </div>
@@ -1059,6 +1071,7 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
               <div style="display: flex; gap: 8px;">
                 <button type="button" onclick="approvePendingReply('${{item.id}}', this)" style="padding: 6px 12px; font-size: 12px;">✅ 批准发送</button>
                 <button type="button" class="secondary" onclick="rejectPendingReply('${{item.id}}', this)" style="padding: 6px 12px; font-size: 12px;">❌ 拒绝</button>
+                <button type="button" class="secondary" onclick="banTopic('${{item.topic_id}}', this)" style="padding: 6px 12px; font-size: 12px;">🔨 封禁话题</button>
               </div>`;
           }}
 
@@ -1082,6 +1095,63 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
         }}).join('');
       }} catch (e) {{
         container.innerHTML = '<div class="module-item empty" style="color: var(--error);">获取待审核数据失败...</div>';
+      }}
+    }}
+
+    async function loadBannedTopics() {{
+      const container = document.getElementById('banned-topics-container');
+      try {{
+        const res = await fetch('/topics/banned');
+        if (!res.ok) {{
+          container.innerHTML = `<div class="module-item empty" style="color: var(--error);">加载失败: ${{escapeHtml(await readErrorDetail(res, '未知错误'))}}</div>`;
+          return;
+        }}
+        const data = await res.json();
+        const items = data.items || [];
+        if (!items.length) {{
+          container.innerHTML = '<div class="module-item empty">暂无已封禁话题</div>';
+          return;
+        }}
+        container.innerHTML = items.map(item => `
+          <div class="module-item" style="flex-direction: column; align-items: stretch; padding: 10px 12px;">
+            <div style="display: flex; justify-content: space-between; gap: 12px; align-items: center;">
+              <strong style="font-size: 14px;">#${{escapeHtml(item.topic_id)}}</strong>
+              <span style="font-size: 12px; color: var(--muted);">${{new Date(item.created_at).toLocaleString()}}</span>
+            </div>
+            <div style="font-size: 13px; color: var(--muted); margin-top: 4px;">
+              <b>原因:</b> ${{escapeHtml(item.reason || '无')}}
+            </div>
+          </div>
+        `).join('');
+      }} catch (_error) {{
+        container.innerHTML = '<div class="module-item empty" style="color: var(--error);">获取封禁话题失败...</div>';
+      }}
+    }}
+
+    async function banTopic(topicId, btnEl) {{
+      const originalText = btnEl.textContent;
+      btnEl.disabled = true;
+      btnEl.textContent = '封禁中...';
+      try {{
+        const res = await fetch(`/topics/${{encodeURIComponent(topicId)}}/ban`, {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ reason: 'banned from webui' }}),
+        }});
+        if (!res.ok) {{
+          setStatus('prompt-modules-status', '封禁失败: ' + await readErrorDetail(res, '请求失败'), true);
+          btnEl.disabled = false;
+          btnEl.textContent = originalText;
+          return;
+        }}
+        setStatus('prompt-modules-status', `话题 #${{topicId}} 已封禁 ✓`);
+        await loadBannedTopics();
+        await loadPipelineRuns();
+        await loadPendingApprovals();
+      }} catch (e) {{
+        setStatus('prompt-modules-status', '网络错误: ' + e.message, true);
+        btnEl.disabled = false;
+        btnEl.textContent = originalText;
       }}
     }}
 
@@ -1155,12 +1225,14 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
     loadLogs();
     loadPipelineRuns();
     loadPendingApprovals();
+    loadBannedTopics();
     
     // Auto-refresh logs and pipeline runs every 10s
     setInterval(() => {{
       loadLogs();
       loadPipelineRuns();
       loadPendingApprovals();
+      loadBannedTopics();
     }}, 10000);
   </script>
 </body>
