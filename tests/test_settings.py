@@ -119,7 +119,31 @@ def test_settings_load_custom_prompt_modules(tmp_path: Path) -> None:
     ]
 
 
-def test_settings_reject_missing_prompt_module_file(tmp_path: Path) -> None:
+def test_settings_missing_prompt_module_file_is_ignored_with_fallback(tmp_path: Path) -> None:
+    root = tmp_path
+    config_dir = _write_base_config(root)
+    prompt_modules_toml = (
+        "[planner]\n[[planner.modules]]\nname='planner.md'\nenabled=true\n\n"
+        "[replyer]\n[[replyer.modules]]\nname='TsundereCatgirlMaid.md'\nenabled=true\n\n"
+        "[memory]\n[[memory.modules]]\nname='missing_memory.md'\nenabled=true\n"
+    )
+    _ = (config_dir / "prompt_modules.toml").write_text(prompt_modules_toml, encoding="utf-8")
+
+    settings = load_settings(AppPaths.from_root(root))
+
+    assert [module.name for module in settings.prompt_modules.planner.modules] == ["planner.md"]
+    assert [module.name for module in settings.prompt_modules.replyer.modules] == [
+        "replyer.md",
+        "style_rules.md",
+        "safety_rules.md",
+    ]
+    assert [module.name for module in settings.prompt_modules.memory.modules] == [
+        "memory_user_update.md",
+        "memory_self_update.md",
+    ]
+
+
+def test_settings_still_rejects_missing_modules_on_explicit_validation(tmp_path: Path) -> None:
     root = tmp_path
     config_dir = _write_base_config(root)
     prompt_modules_toml = (
@@ -129,8 +153,13 @@ def test_settings_reject_missing_prompt_module_file(tmp_path: Path) -> None:
     )
     _ = (config_dir / "prompt_modules.toml").write_text(prompt_modules_toml, encoding="utf-8")
 
+    from bot.settings import PromptModuleEntry
+    from bot.settings import PromptRouteConfig
+    from bot.settings import validate_prompt_route_config
+
+    route = PromptRouteConfig(modules=[PromptModuleEntry(name="missing_memory.md", enabled=True)])
     with pytest.raises(ValueError, match="references missing modules"):
-        _ = load_settings(AppPaths.from_root(root))
+        validate_prompt_route_config("memory", route, available_files=available_module_files(AppPaths.from_root(root)))
 
 
 def test_settings_reject_prompt_route_without_enabled_modules(tmp_path: Path) -> None:

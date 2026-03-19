@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import httpx
 from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 
+from bot import forum_client as forum_client_module
 from bot.trigger_engine import TriggerEngine
 
 
@@ -11,6 +14,60 @@ router = APIRouter(prefix="/topics", tags=["话题"])
 
 class BanTopicPayload(BaseModel):
     reason: str = "banned from webui"
+
+
+def _format_topic_export_text(topic_id: int, topic_title: str, posts: list[dict[str, object]]) -> str:
+    def _to_int(value: object) -> int:
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except ValueError:
+                return 0
+        return 0
+
+    ordered_posts = sorted(posts, key=lambda post: _to_int(post.get("post_number")))
+    user_by_post_number: dict[int, str] = {}
+    for post in ordered_posts:
+        post_number = _to_int(post.get("post_number"))
+        username = str(post.get("username") or "")
+        if post_number > 0:
+            user_by_post_number[post_number] = username
+
+    lines = [
+        f"topic_id: {topic_id}",
+        f"topic_title: {topic_title}",
+        f"post_count: {len(ordered_posts)}",
+        "",
+    ]
+
+    for post in ordered_posts:
+        post_number = _to_int(post.get("post_number"))
+        reply_to_post_number = _to_int(post.get("reply_to_post_number"))
+        reply_to_username = user_by_post_number.get(reply_to_post_number, "") if reply_to_post_number > 0 else ""
+        username = str(post.get("username") or "")
+        created_at = str(post.get("created_at") or "")
+        raw_text = str(post.get("raw_text") or "")
+
+        lines.append(f"--- post #{post_number} ---")
+        lines.append(f"sender: {username}")
+        lines.append(f"time: {created_at}")
+        if reply_to_post_number > 0:
+            lines.append(f"reply_to_post_number: {reply_to_post_number}")
+            lines.append(f"reply_to_user: {reply_to_username}")
+        else:
+            lines.append("reply_to_post_number: topic")
+            lines.append("reply_to_user: topic")
+        lines.append("content:")
+        lines.append(raw_text)
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 @router.get("/banned", summary="查看已封禁话题")
@@ -50,6 +107,44 @@ def topic_states(request: Request) -> dict[str, object]:
 def pending_replies(request: Request) -> dict[str, object]:
     database = request.app.state.database
     return {"items": database.list_pending_replies()}
+
+
+@router.get("/{topic_id}/export.txt", summary="导出话题全文 TXT")
+async def export_topic_txt(topic_id: int, request: Request) -> PlainTextResponse:
+    settings = request.app.state.settings
+    forum_client = forum_client_module.ForumClient(settings.forum, settings.credentials, read_only=True)
+    try:
+        await forum_client.login()
+        topic = await forum_client.get_topic(topic_id)
+        topic_title = str(topic.get("title") or "")
+        stream_ids = []
+        for post_id in topic.get("post_stream", {}).get("stream", []):
+            if isinstance(post_id, bool):
+                stream_ids.append(int(post_id))
+            elif isinstance(post_id, int):
+                stream_ids.append(post_id)
+            elif isinstance(post_id, float):
+                stream_ids.append(int(post_id))
+            elif isinstance(post_id, str):
+                try:
+                    stream_ids.append(int(post_id.strip()))
+                except ValueError:
+                    continue
+        posts = await forum_client.get_posts(topic_id, stream_ids)
+        content = _format_topic_export_text(topic_id=topic_id, topic_title=topic_title, posts=posts)
+    except httpx.HTTPStatusError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"topic {topic_id} not found") from exc
+        raise HTTPException(status_code=502, detail=f"topic export failed: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"topic export failed: {exc}") from exc
+    finally:
+        await forum_client.aclose()
+
+    return PlainTextResponse(
+        content,
+        headers={"Content-Disposition": f'attachment; filename="topic-{topic_id}.txt"'},
+    )
 
 
 @router.post("/{topic_id}/ban", summary="封禁话题")

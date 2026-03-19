@@ -1,0 +1,1 @@
+"""SuenMeow database package."""

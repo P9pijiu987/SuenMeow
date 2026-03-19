@@ -5,6 +5,10 @@ services:
       SUENMEOW_ENV: production
     volumes:
       - ./config:/app/config:ro
+      - ./prompts:/app/prompts
+      - ./personas:/app/personas
+      - ./prompts_public:/app/prompts_public
+      - ./personas_public:/app/personas_public
       - suenmeow_data:/app/data
       - ./logs:/app/logs
 
@@ -14,6 +18,10 @@ services:
       SUENMEOW_ENV: production
     volumes:
       - ./config:/app/config:ro
+      - ./prompts:/app/prompts
+      - ./personas:/app/personas
+      - ./prompts_public:/app/prompts_public
+      - ./personas_public:/app/personas_public
       - suenmeow_data:/app/data
       - ./logs:/app/logs
 
@@ -23,5 +31,9 @@ services:
       SUENMEOW_ENV: production
     volumes:
       - ./config:/app/config:ro
+      - ./prompts:/app/prompts
+      - ./personas:/app/personas
+      - ./prompts_public:/app/prompts_public
+      - ./personas_public:/app/personas_public
       - suenmeow_data:/app/data
       - ./logs:/app/logs

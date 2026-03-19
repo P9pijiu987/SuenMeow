@@ -7,6 +7,10 @@ x-suenmeow-common: &suenmeow-common
   stop_grace_period: 30s
   volumes:
     - ./config:/app/config
+    - ./prompts:/app/prompts
+    - ./personas:/app/personas
+    - ./prompts_public:/app/prompts_public
+    - ./personas_public:/app/personas_public
     - suenmeow_data:/app/data
     - ./logs:/app/logs
 

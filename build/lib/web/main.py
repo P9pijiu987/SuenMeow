@@ -469,19 +469,6 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
         <div class="module-item empty">等待获取流水线记录...</div>
       </div>
     </section>
-
-    <section class="card col-span-12">
-      <div class="card-header"><h2>📥 话题全文导出 (Topic TXT Export)</h2></div>
-      <div class="flex-row">
-        <div>
-          <label for="topic-export-input">输入 Topic ID</label>
-          <input id="topic-export-input" type="text" placeholder="例如: 12345" />
-        </div>
-        <button class="auto-width" type="button" onclick="exportTopicFromInput()" style="padding: 10px 16px; margin: 0;">⬇️ 导出 TXT</button>
-      </div>
-      <div style="margin-top: 10px; color: var(--muted); font-size: 13px;">导出内容包含：发送人、发送时间、回复对象、正文文本。</div>
-      <div id="topic-export-status" class="status" style="margin-top: 8px;"></div>
-    </section>
   </div>
 
   <script>
@@ -518,12 +505,6 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
       }} catch (_error) {{
         return fallback;
       }}
-    }}
-
-    function normalizeTopicId(input) {{
-      const trimmed = String(input || '').trim();
-      if (!trimmed) return '';
-      return /^\\d+$/.test(trimmed) ? trimmed : '';
     }}
 
     async function refreshPromptFiles(preferred = '') {{
@@ -1032,7 +1013,6 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
                 <div style="display: flex; gap: 8px; align-items: center;">
                   <span style="font-size: 13px; font-weight: bold; color: ${{actionColor}};">${{escapeHtml(actionText)}}</span>
                   <button type="button" class="secondary" onclick="banTopic('${{run.topic_id}}', this)" style="padding: 4px 10px; font-size: 12px;">🔨 封禁</button>
-                  <button type="button" class="secondary" onclick="exportTopicById('${{run.topic_id}}', this)" style="padding: 4px 10px; font-size: 12px;">⬇️ 导出TXT</button>
                   <a href="/topics/runs/${{escapeHtml(run.id)}}" target="_blank" style="font-size: 12px; color: var(--primary); text-decoration: none;">查看详情</a>
                 </div>
               </div>
@@ -1092,7 +1072,6 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
                 <button type="button" onclick="approvePendingReply('${{item.id}}', this)" style="padding: 6px 12px; font-size: 12px;">✅ 批准发送</button>
                 <button type="button" class="secondary" onclick="rejectPendingReply('${{item.id}}', this)" style="padding: 6px 12px; font-size: 12px;">❌ 拒绝</button>
                 <button type="button" class="secondary" onclick="banTopic('${{item.topic_id}}', this)" style="padding: 6px 12px; font-size: 12px;">🔨 封禁话题</button>
-                <button type="button" class="secondary" onclick="exportTopicById('${{item.topic_id}}', this)" style="padding: 6px 12px; font-size: 12px;">⬇️ 导出TXT</button>
               </div>`;
           }}
 
@@ -1230,53 +1209,6 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
         btnEl.disabled = false;
         btnEl.textContent = originalText;
       }}
-    }}
-
-    async function downloadTopicTxt(topicId) {{
-      const res = await fetch(`/topics/${{encodeURIComponent(topicId)}}/export.txt`);
-      if (!res.ok) {{
-        throw new Error(await readErrorDetail(res, '导出失败'));
-      }}
-      const text = await res.text();
-      const blob = new Blob([text], {{ type: 'text/plain;charset=utf-8' }});
-      const objectUrl = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = objectUrl;
-      link.download = `topic-${{topicId}}.txt`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(objectUrl);
-    }}
-
-    async function exportTopicById(topicId, btnEl = null) {{
-      const originalText = btnEl ? btnEl.textContent : '';
-      if (btnEl) {{
-        btnEl.disabled = true;
-        btnEl.textContent = '导出中...';
-      }}
-      try {{
-        await downloadTopicTxt(topicId);
-        setStatus('topic-export-status', `话题 #${{topicId}} 导出成功 ✓`);
-      }} catch (e) {{
-        const message = e && e.message ? e.message : '导出失败';
-        setStatus('topic-export-status', `导出失败: ${{message}}`, true);
-      }} finally {{
-        if (btnEl) {{
-          btnEl.disabled = false;
-          btnEl.textContent = originalText;
-        }}
-      }}
-    }}
-
-    async function exportTopicFromInput() {{
-      const input = document.getElementById('topic-export-input');
-      const topicId = normalizeTopicId(input.value);
-      if (!topicId) {{
-        setStatus('topic-export-status', '请输入纯数字 Topic ID', true);
-        return;
-      }}
-      await exportTopicById(topicId);
     }}
 
     // Init

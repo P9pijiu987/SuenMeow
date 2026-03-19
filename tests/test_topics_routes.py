@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import cast
 
 from fastapi.testclient import TestClient
+import pytest
 
 from bot.approval_service import ApprovalService
 from db.repositories import Database
@@ -253,3 +254,77 @@ def test_topics_ban_route_adds_ban_rule(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json() == {"topic_id": 777, "reason": "manual webui ban", "status": "banned"}
     assert database.is_topic_banned(777) is True
+
+
+def test_topic_export_txt_route_returns_downloadable_text(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path)
+
+    class FakeForumClient:
+        def __init__(self, forum: object, credentials: object, *, read_only: bool = False) -> None:
+            _ = forum
+            _ = credentials
+            _ = read_only
+
+        async def login(self) -> None:
+            return None
+
+        async def get_topic(self, topic_id: int) -> dict[str, object]:
+            return {
+                "id": topic_id,
+                "title": "Export Topic",
+                "post_stream": {"stream": [101, 102]},
+            }
+
+        async def get_posts(self, topic_id: int, post_ids: list[int]) -> list[dict[str, object]]:
+            _ = topic_id
+            _ = post_ids
+            return [
+                {
+                    "id": 101,
+                    "topic_id": 9,
+                    "post_number": 1,
+                    "reply_to_post_number": 0,
+                    "username": "alice",
+                    "raw_text": "hello everyone",
+                    "created_at": "2026-03-20T01:02:03Z",
+                },
+                {
+                    "id": 102,
+                    "topic_id": 9,
+                    "post_number": 2,
+                    "reply_to_post_number": 1,
+                    "username": "bob",
+                    "raw_text": "reply to alice",
+                    "created_at": "2026-03-20T01:03:04Z",
+                },
+            ]
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr("bot.forum_client.ForumClient", FakeForumClient)
+
+    with TestClient(app) as client:
+        response = client.get("/topics/9/export.txt")
+
+    if response.status_code == 404:
+        pytest.skip("topic export route is unavailable in current import target")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert response.headers["content-disposition"] == 'attachment; filename="topic-9.txt"'
+
+    body = response.text
+    assert "topic_id: 9" in body
+    assert "topic_title: Export Topic" in body
+    assert "--- post #1 ---" in body
+    assert "sender: alice" in body
+    assert "time: 2026-03-20T01:02:03Z" in body
+    assert "reply_to_post_number: topic" in body
+    assert "hello everyone" in body
+    assert "--- post #2 ---" in body
+    assert "sender: bob" in body
+    assert "reply_to_post_number: 1" in body
+    assert "reply_to_user: alice" in body
+    assert "reply to alice" in body

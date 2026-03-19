@@ -3,15 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from dataclasses import field
 import json
-import logging
 import os
 from pathlib import Path
 import shutil
 from typing import Any
 import tomllib
-
-
-logger = logging.getLogger(__name__)
 
 
 DEFAULT_PLANNER_PROMPT_MODULES = ("planner.md", "safety_rules.md")
@@ -243,53 +239,15 @@ def default_prompt_modules_config() -> PromptModulesConfig:
 
 
 def validate_prompt_route_config(route_name: str, route: PromptRouteConfig, *, available_files: set[str]) -> None:
-    _validate_prompt_route_structure(route_name, route)
-    missing_modules = [module.name for module in route.modules if module.name not in available_files]
-    if missing_modules:
-        missing_list = ", ".join(sorted(missing_modules))
-        raise ValueError(f"Prompt route '{route_name}' references missing modules: {missing_list}")
-
-
-def _validate_prompt_route_structure(route_name: str, route: PromptRouteConfig) -> None:
     if not route.modules:
         raise ValueError(f"Prompt route '{route_name}' must contain at least one module")
     if not any(module.enabled for module in route.modules):
         raise ValueError(f"Prompt route '{route_name}' must enable at least one module")
 
-
-def _sanitize_loaded_prompt_route(
-    route_name: str,
-    route: PromptRouteConfig,
-    *,
-    default_names: tuple[str, ...],
-    available_files: set[str],
-) -> PromptRouteConfig:
     missing_modules = [module.name for module in route.modules if module.name not in available_files]
     if missing_modules:
         missing_list = ", ".join(sorted(missing_modules))
-        logger.warning(
-            "Prompt route '%s' references missing modules: %s; missing modules will be ignored during load",
-            route_name,
-            missing_list,
-        )
-    filtered_modules = [module for module in route.modules if module.name in available_files]
-    if filtered_modules:
-        sanitized_route = PromptRouteConfig(modules=filtered_modules)
-        _validate_prompt_route_structure(route_name, sanitized_route)
-        return sanitized_route
-
-    fallback_names = [name for name in default_names if name in available_files]
-    if not fallback_names:
-        raise ValueError(
-            f"Prompt route '{route_name}' has no available modules after filtering; expected one of: {', '.join(default_names)}"
-        )
-    fallback_list = ", ".join(fallback_names)
-    logger.warning(
-        "Prompt route '%s' has no available configured modules; falling back to defaults: %s",
-        route_name,
-        fallback_list,
-    )
-    return _default_prompt_route_config(tuple(fallback_names))
+        raise ValueError(f"Prompt route '{route_name}' references missing modules: {missing_list}")
 
 
 def validate_prompt_modules_config(paths: AppPaths, prompt_modules: PromptModulesConfig) -> None:
@@ -302,12 +260,8 @@ def validate_prompt_modules_config(paths: AppPaths, prompt_modules: PromptModule
 def _load_prompt_route_config(raw_route: Any, default_names: tuple[str, ...], *, route_name: str, available_files: set[str]) -> PromptRouteConfig:
     if raw_route is None:
         route = _default_prompt_route_config(default_names)
-        return _sanitize_loaded_prompt_route(
-            route_name,
-            route,
-            default_names=default_names,
-            available_files=available_files,
-        )
+        validate_prompt_route_config(route_name, route, available_files=available_files)
+        return route
 
     modules = raw_route.get("modules", []) if isinstance(raw_route, dict) else raw_route if isinstance(raw_route, list) else None
     if not isinstance(modules, list):
@@ -332,12 +286,8 @@ def _load_prompt_route_config(raw_route: Any, default_names: tuple[str, ...], *,
         seen.add(name)
         loaded_modules.append(PromptModuleEntry(name=name, enabled=enabled))
     route = PromptRouteConfig(modules=loaded_modules)
-    return _sanitize_loaded_prompt_route(
-        route_name,
-        route,
-        default_names=default_names,
-        available_files=available_files,
-    )
+    validate_prompt_route_config(route_name, route, available_files=available_files)
+    return route
 
 
 def enabled_prompt_module_names(route: PromptRouteConfig) -> list[str]:
