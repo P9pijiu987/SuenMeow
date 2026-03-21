@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import cast
 
 import pytest
 
 from bot.activity_worker import ActivityWorker
+from bot.forum_client import ForumClient
 from bot.settings import AppPaths
 from bot.settings import load_settings
 from db.repositories import Database
@@ -15,16 +15,14 @@ from db.repositories import Database
 
 def _write_project_files(root: Path) -> None:
     prompts_dir = root / "prompts"
-    personas_dir = root / "personas"
     _ = prompts_dir.mkdir()
-    _ = personas_dir.mkdir()
     _ = (prompts_dir / "planner.md").write_text("planner", encoding="utf-8")
     _ = (prompts_dir / "replyer.md").write_text("replyer", encoding="utf-8")
     _ = (prompts_dir / "style_rules.md").write_text("style", encoding="utf-8")
     _ = (prompts_dir / "safety_rules.md").write_text("safety", encoding="utf-8")
     _ = (prompts_dir / "memory_user_update.md").write_text("memory user", encoding="utf-8")
     _ = (prompts_dir / "memory_self_update.md").write_text("memory self", encoding="utf-8")
-    _ = (personas_dir / "core.md").write_text("core persona", encoding="utf-8")
+    _ = (prompts_dir / "core.md").write_text("core persona", encoding="utf-8")
 
 
 def _write_config(root: Path, *, hot_reply_min: int = 10) -> None:
@@ -76,11 +74,12 @@ def _write_config(root: Path, *, hot_reply_min: int = 10) -> None:
 
 
 @dataclass
-class _FakeForumClient:
+class _FakeForumClient(ForumClient):
     latest_topics_payload: list[dict[str, object]]
     topic_posts_payload: dict[int, list[dict[str, object]]]
 
-    async def list_latest_topics(self) -> list[dict[str, object]]:
+    async def list_latest_topics(self, page: int = 0) -> list[dict[str, object]]:
+        _ = page
         return self.latest_topics_payload
 
     async def get_topic_selected_posts(
@@ -95,13 +94,13 @@ class _FakeForumClient:
         return self.topic_posts_payload[topic_id]
 
 
-def _make_worker(tmp_path: Path, forum_client: _FakeForumClient, *, hot_reply_min: int = 10) -> tuple[ActivityWorker, Database]:
+def _make_worker(tmp_path: Path, forum_client: ForumClient, *, hot_reply_min: int = 10) -> tuple[ActivityWorker, Database]:
     _write_project_files(tmp_path)
     _write_config(tmp_path, hot_reply_min=hot_reply_min)
     database = Database(tmp_path / "data" / "suenmeow.sqlite3")
     database.initialize()
     settings = load_settings(AppPaths.from_root(tmp_path))
-    worker = ActivityWorker(cast(object, forum_client), database, settings.thresholds)
+    worker = ActivityWorker(forum_client, database, settings.thresholds)
     return worker, database
 
 

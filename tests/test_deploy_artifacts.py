@@ -23,9 +23,7 @@ def test_base_compose_defines_web_and_worker_services() -> None:
     assert '- "${SUENMEOW_WEB_PORT:-8000}:8000"' in compose
     assert "healthcheck:" in compose
     assert "./prompts:/app/prompts" in compose
-    assert "./personas:/app/personas" in compose
-    assert "./prompts_public:/app/prompts_public" in compose
-    assert "./personas_public:/app/personas_public" in compose
+    assert "./prompts_backup:/app/prompts_backup" in compose
     assert "suenmeow_data:/app/data" in compose
     assert "volumes:" in compose
     assert "suenmeow_data:" in compose
@@ -40,9 +38,7 @@ def test_prod_compose_makes_config_read_only() -> None:
     assert "SUENMEOW_ENV: production" in compose
     assert compose.count("./config:/app/config:ro") == 3
     assert compose.count("./prompts:/app/prompts") == 3
-    assert compose.count("./personas:/app/personas") == 3
-    assert compose.count("./prompts_public:/app/prompts_public") == 3
-    assert compose.count("./personas_public:/app/personas_public") == 3
+    assert compose.count("./prompts_backup:/app/prompts_backup") == 3
     assert compose.count("suenmeow_data:/app/data") == 3
 
 

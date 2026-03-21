@@ -7,6 +7,12 @@ from bot.approval_service import ApprovalService
 from web.main import create_app
 
 
+def _assert_prompt_backup_created(root: Path, stem: str) -> None:
+    backup_dir = root / "prompts_backup"
+    assert backup_dir.exists()
+    assert any(path.name.startswith(f"{stem}__") and path.suffix == ".md" for path in backup_dir.glob("*.md"))
+
+
 def _write_config(
     root: Path,
     *,
@@ -23,12 +29,10 @@ def _write_config(
     data_dir = root / "data"
     log_dir = root / "logs"
     prompts_dir = root / "prompts"
-    personas_dir = root / "personas"
     _ = config_dir.mkdir()
     _ = data_dir.mkdir()
     _ = log_dir.mkdir()
     _ = prompts_dir.mkdir()
-    _ = personas_dir.mkdir()
 
     _ = (config_dir / "credentials.toml").write_text("[forum]\nusername='u'\npassword='p'\n", encoding="utf-8")
     _ = (config_dir / "forum.toml").write_text("base_url='https://forum.example.com'\nretry=3\nuser_agent='ua'\n", encoding="utf-8")
@@ -75,8 +79,8 @@ def _write_config(
     _ = (prompts_dir / "custom_rules.md").write_text("custom rule", encoding="utf-8")
     _ = (prompts_dir / "memory_user_update.md").write_text("memory user rule", encoding="utf-8")
     _ = (prompts_dir / "memory_self_update.md").write_text("memory self rule", encoding="utf-8")
-    _ = (personas_dir / "core.md").write_text("old core", encoding="utf-8")
-    _ = (personas_dir / "catgirl.md").write_text("catgirl persona", encoding="utf-8")
+    _ = (prompts_dir / "core.md").write_text("old core", encoding="utf-8")
+    _ = (prompts_dir / "catgirl.md").write_text("catgirl persona", encoding="utf-8")
 
 
 def _runtime_badges_section(html: str) -> str:
@@ -103,6 +107,7 @@ def test_prompt_routes_support_read_and_update(tmp_path: Path) -> None:
         assert invalid.status_code == 400
 
     assert (tmp_path / "prompts" / "planner.md").read_text(encoding="utf-8") == "new planner"
+    _assert_prompt_backup_created(tmp_path, "planner")
 
 
 def test_prompt_routes_support_create_new_file(tmp_path: Path) -> None:
@@ -119,6 +124,7 @@ def test_prompt_routes_support_create_new_file(tmp_path: Path) -> None:
         assert "new_prompt.md" in listed.json()["files"]
 
     assert (tmp_path / "prompts" / "new_prompt.md").read_text(encoding="utf-8") == "brand new prompt"
+    _assert_prompt_backup_created(tmp_path, "new_prompt")
 
 
 def test_persona_and_self_memory_routes_support_update(tmp_path: Path) -> None:
@@ -156,7 +162,8 @@ def test_persona_and_self_memory_routes_support_update(tmp_path: Path) -> None:
         assert data["user_memories"][0]["username"] == "test_user"
         assert data["user_memories"][0]["memory_text"] == "user likes cats"
 
-    assert (tmp_path / "personas" / "core.md").read_text(encoding="utf-8") == "new core"
+    assert (tmp_path / "prompts" / "core.md").read_text(encoding="utf-8") == "new core"
+    _assert_prompt_backup_created(tmp_path, "core")
 
 
 def test_persona_routes_support_create_new_file(tmp_path: Path) -> None:
@@ -172,7 +179,8 @@ def test_persona_routes_support_create_new_file(tmp_path: Path) -> None:
         assert listed.status_code == 200
         assert "helper.md" in listed.json()["files"]
 
-    assert (tmp_path / "personas" / "helper.md").read_text(encoding="utf-8") == "helpful persona"
+    assert (tmp_path / "prompts" / "helper.md").read_text(encoding="utf-8") == "helpful persona"
+    _assert_prompt_backup_created(tmp_path, "helper")
 
 
 def test_openapi_uses_chinese_visible_copy_but_keeps_main_title(tmp_path: Path) -> None:
@@ -207,6 +215,8 @@ def test_config_prompt_modules_support_read_and_update(tmp_path: Path) -> None:
         assert response.status_code == 200
         data = response.json()
         assert data["available_prompt_files"] == [
+            "catgirl.md",
+            "core.md",
             "custom_rules.md",
             "memory_self_update.md",
             "memory_user_update.md",
@@ -215,7 +225,17 @@ def test_config_prompt_modules_support_read_and_update(tmp_path: Path) -> None:
             "safety_rules.md",
             "style_rules.md",
         ]
-        assert data["available_persona_files"] == ["catgirl.md", "core.md"]
+        assert data["available_persona_files"] == [
+            "catgirl.md",
+            "core.md",
+            "custom_rules.md",
+            "memory_self_update.md",
+            "memory_user_update.md",
+            "planner.md",
+            "replyer.md",
+            "safety_rules.md",
+            "style_rules.md",
+        ]
         assert data["available_module_files"] == [
             "catgirl.md",
             "core.md",
@@ -526,7 +546,7 @@ def test_homepage_renders_real_chinese_admin_page(tmp_path: Path) -> None:
     assert "/memory/user/" in text
 
 
-def test_public_editor_routes_support_readonly_builtin_and_writable_public(tmp_path: Path) -> None:
+def test_public_editor_routes_use_unified_prompts_storage(tmp_path: Path) -> None:
     _write_config(tmp_path)
     app = create_app(tmp_path, app_mode="public")
     client = TestClient(app)
@@ -534,23 +554,37 @@ def test_public_editor_routes_support_readonly_builtin_and_writable_public(tmp_p
     config_res = client.get("/public/config")
     assert config_res.status_code == 200
     cfg = config_res.json()
-    assert "planner.md" in cfg["prompt_builtin"]
-    assert "core.md" in cfg["persona_builtin"]
+    assert "planner.md" in cfg["prompts"]
+    assert "core.md" in cfg["prompts"]
 
     builtin_read = client.get("/public/prompts/planner.md")
     assert builtin_read.status_code == 200
-    assert builtin_read.json()["readonly"] is True
+    assert builtin_read.json()["readonly"] is False
 
-    readonly_write = client.put("/public/prompts/planner.md", json={"content": "hacked"})
-    assert readonly_write.status_code == 403
+    overwrite_existing = client.put("/public/prompts/planner.md", json={"content": "updated planner"})
+    assert overwrite_existing.status_code == 200
+    assert overwrite_existing.json()["stored_in"] == "prompts"
+    assert "backup_path" in overwrite_existing.json()
 
     write_new = client.put("/public/prompts/custom_public.md", json={"content": "public custom"})
     assert write_new.status_code == 200
-    assert write_new.json()["stored_in"] == "prompts_public"
+    assert write_new.json()["stored_in"] == "prompts"
+    assert "backup_path" in write_new.json()
+    assert (tmp_path / "prompts" / "custom_public.md").read_text(encoding="utf-8") == "public custom"
 
     read_new = client.get("/public/prompts/custom_public.md")
     assert read_new.status_code == 200
     assert read_new.json()["readonly"] is False
+
+    persona_write = client.put("/public/personas/helper_public.md", json={"content": "persona content"})
+    assert persona_write.status_code == 200
+    assert persona_write.json()["stored_in"] == "prompts"
+    assert "backup_path" in persona_write.json()
+    assert (tmp_path / "prompts" / "helper_public.md").read_text(encoding="utf-8") == "persona content"
+
+    _assert_prompt_backup_created(tmp_path, "planner")
+    _assert_prompt_backup_created(tmp_path, "custom_public")
+    _assert_prompt_backup_created(tmp_path, "helper_public")
 
 
 def test_public_editor_memory_is_readonly(tmp_path: Path) -> None:

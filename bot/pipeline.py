@@ -420,6 +420,18 @@ class Pipeline:
             + f"Relevant user memories:\n{json.dumps(memory_hits, ensure_ascii=False, indent=2, sort_keys=True)}\n\n"
         )
 
+    @staticmethod
+    def _decision_prompt_summary(decision: PlannerDecision) -> str:
+        return (
+            f"should_reply: {decision.should_reply}\n"
+            f"priority: {decision.priority}\n"
+            f"target_username: {decision.target_username or '(none)'}\n"
+            f"target_post_number: {decision.target_post_number if decision.target_post_number is not None else '(none)'}\n"
+            f"reason: {decision.reason}\n"
+            f"style_notes: {decision.style_notes}\n"
+            f"memory_action: {decision.memory_action}"
+        )
+
     def _build_memory_command_user_prompt(
         self,
         prompt_bundle: PromptBundle,
@@ -686,7 +698,7 @@ class Pipeline:
                 if prompt_bundle["reply_extra_persona"]
                 else ""
             )
-            + f"Decision:\n{decision.to_dict()}\n\n"
+            + f"Decision:\n{self._decision_prompt_summary(decision)}\n\n"
             + (f"Memory context:\n{reply_memory_block}" if reply_memory_block else "")
             + f"Thread context:\n{prompt_bundle['replyer_context']}\n\n"
             + "Write a single forum reply only."
@@ -879,10 +891,35 @@ class Pipeline:
             except RuntimeError:
                 action = "pending_approval_skip"
         elif self._should_send_reply(forum_client, result):
+            outbound_content = Replyer.sanitize_reply_text(result["draft"].content)
+            if not outbound_content:
+                action = "reply_error"
+                self.database.record_pipeline_run(
+                    event_id=event_id,
+                    topic_id=topic_id,
+                    topic_title=topic_title,
+                    trigger_reason=trigger_reason,
+                    action=action,
+                    decision=result["decision"].to_dict(),
+                    draft_content=result["draft"].content,
+                )
+                return {
+                    "action": action,
+                    "pending_reply_id": pending_reply_id,
+                    "topic_id": topic_id,
+                    "topic_title": topic_title,
+                    "post_count": len(posts),
+                    "decision": result["decision"].to_dict(),
+                    "draft": result["draft"].to_dict(),
+                    "memory_hits": {key: value for key, value in result["user_memories"].items() if value},
+                    "persona_modules": result["persona_modules"],
+                    "planner_prompt_preview": result["planner_prompt_preview"],
+                    "replyer_prompt_preview": result["replyer_prompt_preview"],
+                }
             try:
                 reply_response = await forum_client.reply(
                     topic_id,
-                    result["draft"].content,
+                    outbound_content,
                     result["decision"].target_post_number,
                 )
             except Exception:
@@ -900,7 +937,7 @@ class Pipeline:
             reply_post_id = reply_post_id_raw if isinstance(reply_post_id_raw, int) else None
             self.database.record_reply(
                 topic_id,
-                result["draft"].content,
+                outbound_content,
                 reply_post_id,
                 result["decision"].target_post_number,
             )

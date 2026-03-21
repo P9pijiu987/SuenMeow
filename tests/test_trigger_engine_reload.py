@@ -10,9 +10,7 @@ from db.repositories import Database
 
 def _write_project_files(root: Path) -> None:
     prompts_dir = root / "prompts"
-    personas_dir = root / "personas"
     _ = prompts_dir.mkdir()
-    _ = personas_dir.mkdir()
 
     _ = (prompts_dir / "planner.md").write_text("planner", encoding="utf-8")
     _ = (prompts_dir / "replyer.md").write_text("replyer", encoding="utf-8")
@@ -21,8 +19,8 @@ def _write_project_files(root: Path) -> None:
     _ = (prompts_dir / "custom_rules.md").write_text("custom", encoding="utf-8")
     _ = (prompts_dir / "memory_user_update.md").write_text("memory user", encoding="utf-8")
     _ = (prompts_dir / "memory_self_update.md").write_text("memory self", encoding="utf-8")
-    _ = (personas_dir / "core.md").write_text("core persona", encoding="utf-8")
-    _ = (personas_dir / "catgirl.md").write_text("catgirl persona", encoding="utf-8")
+    _ = (prompts_dir / "core.md").write_text("core persona", encoding="utf-8")
+    _ = (prompts_dir / "catgirl.md").write_text("catgirl persona", encoding="utf-8")
 
 
 def _write_config(

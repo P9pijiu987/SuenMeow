@@ -23,8 +23,6 @@ from bot.planner import Planner
 from bot.prompt_loader import PromptLoader
 from bot.replyer import Replyer
 from bot.settings import load_settings
-from bot.settings import PUBLIC_PERSONAS_DIRNAME
-from bot.settings import PUBLIC_PROMPTS_DIRNAME
 from bot.settings import Settings
 from db.repositories import Database
 
@@ -63,12 +61,10 @@ class TriggerEngine:
             planner=Planner(),
             replyer=Replyer(),
             persona_loader=PersonaLoader(
-                settings.paths.root / "personas",
-                extra_persona_dirs=[settings.paths.root / PUBLIC_PERSONAS_DIRNAME],
+                settings.paths.prompt_dir,
             ),
             prompt_loader=PromptLoader(
-                settings.paths.root / "prompts",
-                extra_prompt_dirs=[settings.paths.root / PUBLIC_PROMPTS_DIRNAME],
+                settings.paths.prompt_dir,
             ),
             llm_client=self.llm_client,
             ban_service=BanService(settings.credentials.username),

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import field
+from datetime import datetime
+from datetime import timezone
 import json
 import logging
 import os
@@ -18,8 +20,12 @@ DEFAULT_PLANNER_PROMPT_MODULES = ("planner.md", "safety_rules.md")
 DEFAULT_REPLYER_PROMPT_MODULES = ("replyer.md", "style_rules.md", "safety_rules.md")
 DEFAULT_MEMORY_PROMPT_MODULES = ("memory_user_update.md", "memory_self_update.md")
 PROMPT_MODULES_CONFIG_FILENAME = "prompt_modules.toml"
-PUBLIC_PROMPTS_DIRNAME = "prompts_public"
-PUBLIC_PERSONAS_DIRNAME = "personas_public"
+PROMPT_BACKUP_DIRNAME = "prompts_backup"
+LEGACY_PROMPT_SOURCE_ENV = {
+    "SUENMEOW_PERSONA_DIR": "personas",
+    "SUENMEOW_PUBLIC_PROMPT_DIR": "prompts_public",
+    "SUENMEOW_PUBLIC_PERSONA_DIR": "personas_public",
+}
 EDITABLE_CONFIG_FILENAMES = (
     "forum.toml",
     "models.toml",
@@ -38,6 +44,9 @@ class AppPaths:
     config_dir: Path
     data_dir: Path
     log_dir: Path
+    prompt_dir: Path
+    prompt_backup_dir: Path
+    legacy_prompt_source_dirs: tuple[Path, ...]
     database_path: Path
 
     @classmethod
@@ -52,11 +61,20 @@ class AppPaths:
         config_dir = resolve_dir("SUENMEOW_CONFIG_DIR", "config")
         data_dir = resolve_dir("SUENMEOW_DATA_DIR", "data")
         log_dir = resolve_dir("SUENMEOW_LOG_DIR", "logs")
+        prompt_dir = resolve_dir("SUENMEOW_PROMPT_DIR", "prompts")
+        prompt_backup_dir = resolve_dir("SUENMEOW_PROMPT_BACKUP_DIR", PROMPT_BACKUP_DIRNAME)
+        legacy_prompt_source_dirs = tuple(
+            resolve_dir(env_name, default_name)
+            for env_name, default_name in LEGACY_PROMPT_SOURCE_ENV.items()
+        )
         return cls(
             root=root,
             config_dir=config_dir,
             data_dir=data_dir,
             log_dir=log_dir,
+            prompt_dir=prompt_dir,
+            prompt_backup_dir=prompt_backup_dir,
+            legacy_prompt_source_dirs=legacy_prompt_source_dirs,
             database_path=data_dir / "suenmeow.sqlite3",
         )
 
@@ -221,17 +239,78 @@ def _default_prompt_route_config(names: tuple[str, ...]) -> PromptRouteConfig:
     return PromptRouteConfig(modules=[PromptModuleEntry(name=name, enabled=True) for name in names])
 
 
+def _safe_legacy_dir_tag(path: Path) -> str:
+    normalized = "".join(char.lower() if char.isalnum() else "_" for char in path.name)
+    cleaned = normalized.strip("_")
+    return cleaned or "legacy"
+
+
+def _copy_legacy_prompt_files(source_dir: Path, target_dir: Path) -> None:
+    if not source_dir.is_dir():
+        return
+    if source_dir.resolve() == target_dir.resolve():
+        return
+
+    source_tag = _safe_legacy_dir_tag(source_dir)
+    for source_file in sorted(source_dir.glob("*.md")):
+        source_content = source_file.read_text(encoding="utf-8")
+        target_file = target_dir / source_file.name
+        if not target_file.exists():
+            _ = target_file.write_text(source_content, encoding="utf-8")
+            logger.info("migrated legacy prompt file into prompts; source=%s target=%s", source_file, target_file)
+            continue
+
+        if target_file.read_text(encoding="utf-8") == source_content:
+            continue
+
+        suffix = source_file.suffix or ".md"
+        index = 0
+        while True:
+            postfix = "" if index == 0 else f"_{index}"
+            candidate_name = f"{source_file.stem}__from_{source_tag}{postfix}{suffix}"
+            candidate = target_dir / candidate_name
+            if not candidate.exists():
+                _ = candidate.write_text(source_content, encoding="utf-8")
+                logger.warning(
+                    "detected legacy prompt name conflict; preserved legacy content as %s (source=%s)",
+                    candidate,
+                    source_file,
+                )
+                break
+            if candidate.read_text(encoding="utf-8") == source_content:
+                break
+            index += 1
+
+
+def ensure_prompt_storage(paths: AppPaths) -> None:
+    paths.prompt_dir.mkdir(parents=True, exist_ok=True)
+    paths.prompt_backup_dir.mkdir(parents=True, exist_ok=True)
+    for source_dir in paths.legacy_prompt_source_dirs:
+        _copy_legacy_prompt_files(source_dir, paths.prompt_dir)
+
+
+def write_prompt_file_with_backup(paths: AppPaths, filename: str, content: str) -> tuple[Path, Path]:
+    ensure_prompt_storage(paths)
+    target = paths.prompt_dir / filename
+    _ = target.write_text(content, encoding="utf-8")
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    suffix = target.suffix or ".md"
+    stem = target.stem or "prompt"
+    index = 0
+    while True:
+        postfix = "" if index == 0 else f"_{index}"
+        backup_name = f"{stem}__{timestamp}{postfix}{suffix}"
+        backup_path = paths.prompt_backup_dir / backup_name
+        if not backup_path.exists():
+            _ = backup_path.write_text(content, encoding="utf-8")
+            return target, backup_path
+        index += 1
+
+
 def available_module_files(paths: AppPaths) -> set[str]:
-    prompt_dir = paths.root / "prompts"
-    persona_dir = paths.root / "personas"
-    public_prompt_dir = paths.root / PUBLIC_PROMPTS_DIRNAME
-    public_persona_dir = paths.root / PUBLIC_PERSONAS_DIRNAME
-    return {
-        *(path.name for path in prompt_dir.glob("*.md")),
-        *(path.name for path in persona_dir.glob("*.md")),
-        *(path.name for path in public_prompt_dir.glob("*.md")),
-        *(path.name for path in public_persona_dir.glob("*.md")),
-    }
+    ensure_prompt_storage(paths)
+    return {path.name for path in paths.prompt_dir.glob("*.md")}
 
 
 def default_prompt_modules_config() -> PromptModulesConfig:
@@ -422,6 +501,7 @@ def save_editable_config_text(paths: AppPaths, filename: str, content: str) -> S
 
 
 def load_settings(paths: AppPaths) -> Settings:
+    ensure_prompt_storage(paths)
     credentials_raw = _load_toml(paths.config_dir / "credentials.toml")
     forum_raw = _load_toml(paths.config_dir / "forum.toml")
     providers_raw = _load_toml(paths.config_dir / "providers.toml")

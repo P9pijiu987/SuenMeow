@@ -98,9 +98,9 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
 
     @app.get("/", summary="首页", response_class=HTMLResponse)
     def index() -> str:
-        prompt_dir = paths.root / "prompts"
-        persona_dir = paths.root / "personas"
-        prompt_modules_hint = "支持把 prompts 与 personas（如 core.md、catgirl.md）一起编排到 planner / replyer / memory 链路中。"
+        prompt_dir = paths.prompt_dir
+        persona_dir = paths.prompt_dir
+        prompt_modules_hint = "提示词与人格文件已统一存放于 prompts/，所有编辑都会自动备份到 prompts_backup/。"
         editable_config_options = "".join(
             f'<option value="{name}">{name}</option>'
             for name in (

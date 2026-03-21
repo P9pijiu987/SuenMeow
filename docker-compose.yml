@@ -8,9 +8,7 @@ x-suenmeow-common: &suenmeow-common
   volumes:
     - ./config:/app/config
     - ./prompts:/app/prompts
-    - ./personas:/app/personas
-    - ./prompts_public:/app/prompts_public
-    - ./personas_public:/app/personas_public
+    - ./prompts_backup:/app/prompts_backup
     - suenmeow_data:/app/data
     - ./logs:/app/logs
 

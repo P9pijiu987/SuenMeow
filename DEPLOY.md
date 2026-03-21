@@ -39,6 +39,8 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 - `data/suenmeow.sqlite3`
 - `logs/latest.log`
 - `config/`
+- `prompts/`（主提示词与人格目录）
+- `prompts_backup/`（每次修改自动追加备份）
 
 ## 回滚手册
 

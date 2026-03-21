@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 
 from bot.settings import editable_config_filenames
+from bot.settings import ensure_prompt_storage
 from bot.settings import available_module_files
 from bot.settings import runtime_mode_name
 from bot.settings import Settings
@@ -48,15 +49,15 @@ class ConfigTextPayload(BaseModel):
 
 
 def _available_prompt_files(request: Request) -> list[str]:
-    prompt_dir = request.app.state.paths.root / "prompts"
-    public_prompt_dir = request.app.state.paths.root / "prompts_public"
-    return sorted({*(path.name for path in prompt_dir.glob("*.md")), *(path.name for path in public_prompt_dir.glob("*.md"))})
+    paths = request.app.state.paths
+    ensure_prompt_storage(paths)
+    return sorted(path.name for path in paths.prompt_dir.glob("*.md"))
 
 
 def _available_persona_files(request: Request) -> list[str]:
-    persona_dir = request.app.state.paths.root / "personas"
-    public_persona_dir = request.app.state.paths.root / "personas_public"
-    return sorted({*(path.name for path in persona_dir.glob("*.md")), *(path.name for path in public_persona_dir.glob("*.md"))})
+    paths = request.app.state.paths
+    ensure_prompt_storage(paths)
+    return sorted(path.name for path in paths.prompt_dir.glob("*.md"))
 
 
 def _available_module_files(request: Request) -> list[str]:

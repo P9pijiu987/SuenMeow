@@ -5,8 +5,11 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from bot.settings import ensure_prompt_storage
+from bot.settings import write_prompt_file_with_backup
 
-router = APIRouter(prefix="/personas", tags=["人格"])
+
+router = APIRouter(prefix="/personas", tags=["人格（已合并到 prompts）"])
 
 
 class MarkdownContentPayload(BaseModel):
@@ -29,7 +32,9 @@ def _resolve_existing_markdown_file(base_dir: Path, filename: str) -> Path:
 
 @router.get("", summary="查看人格文件列表")
 def list_personas(request: Request) -> dict[str, object]:
-    persona_dir = request.app.state.paths.root / "personas"
+    paths = request.app.state.paths
+    ensure_prompt_storage(paths)
+    persona_dir = paths.prompt_dir
     settings = request.app.state.settings
     files = sorted(path.name for path in persona_dir.glob("*.md"))
     return {
@@ -41,7 +46,9 @@ def list_personas(request: Request) -> dict[str, object]:
 
 @router.get("/{filename}", summary="查看人格文件")
 def get_persona(filename: str, request: Request) -> dict[str, object]:
-    persona_dir = request.app.state.paths.root / "personas"
+    paths = request.app.state.paths
+    ensure_prompt_storage(paths)
+    persona_dir = paths.prompt_dir
     path = _resolve_existing_markdown_file(persona_dir, filename)
     return {
         "file": filename,
@@ -51,9 +58,11 @@ def get_persona(filename: str, request: Request) -> dict[str, object]:
 
 @router.put("/{filename}", summary="创建或更新人格文件")
 def update_persona(filename: str, payload: MarkdownContentPayload, request: Request) -> dict[str, object]:
-    persona_dir = request.app.state.paths.root / "personas"
+    paths = request.app.state.paths
+    ensure_prompt_storage(paths)
+    persona_dir = paths.prompt_dir
     path = _normalize_markdown_file(persona_dir, filename)
-    path.write_text(payload.content, encoding="utf-8")
+    _, _ = write_prompt_file_with_backup(paths, path.name, payload.content)
     return {
         "file": filename,
         "content": payload.content,

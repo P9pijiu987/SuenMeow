@@ -12,12 +12,10 @@ def _write_config(root: Path, *, read_only: bool, allow_send_reply: bool, panic_
     data_dir = root / "data"
     log_dir = root / "logs"
     prompts_dir = root / "prompts"
-    personas_dir = root / "personas"
     _ = config_dir.mkdir()
     _ = data_dir.mkdir()
     _ = log_dir.mkdir()
     _ = prompts_dir.mkdir()
-    _ = personas_dir.mkdir()
 
     _ = (config_dir / "credentials.toml").write_text("[forum]\nusername='u'\npassword='p'\n", encoding="utf-8")
     _ = (config_dir / "forum.toml").write_text(
@@ -65,7 +63,7 @@ def _write_config(root: Path, *, read_only: bool, allow_send_reply: bool, panic_
     _ = (prompts_dir / "safety_rules.md").write_text("safety", encoding="utf-8")
     _ = (prompts_dir / "memory_user_update.md").write_text("memory user", encoding="utf-8")
     _ = (prompts_dir / "memory_self_update.md").write_text("memory self", encoding="utf-8")
-    _ = (personas_dir / "core.md").write_text("core", encoding="utf-8")
+    _ = (prompts_dir / "core.md").write_text("core", encoding="utf-8")
 
 
 def _create_pending_reply(database: Database) -> int:

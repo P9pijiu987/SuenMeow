@@ -7,14 +7,14 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from bot.settings import available_module_files
+from bot.settings import ensure_prompt_storage
 from bot.settings import PromptModuleEntry
 from bot.settings import PromptModulesConfig
 from bot.settings import PromptRouteConfig
-from bot.settings import PUBLIC_PERSONAS_DIRNAME
-from bot.settings import PUBLIC_PROMPTS_DIRNAME
 from bot.settings import load_settings
 from bot.settings import save_prompt_modules
 from bot.settings import validate_prompt_modules_config
+from bot.settings import write_prompt_file_with_backup
 
 
 router = APIRouter(prefix="/public", tags=["公网编辑端"])
@@ -47,50 +47,22 @@ def _normalize_markdown_filename(filename: str) -> str:
 
 
 def _prompt_dir(request: Request) -> Path:
-    return request.app.state.paths.root / "prompts"
-
-
-def _persona_dir(request: Request) -> Path:
-    return request.app.state.paths.root / "personas"
-
-
-def _public_prompt_dir(request: Request) -> Path:
-    path = request.app.state.paths.root / PUBLIC_PROMPTS_DIRNAME
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _public_persona_dir(request: Request) -> Path:
-    path = request.app.state.paths.root / PUBLIC_PERSONAS_DIRNAME
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _is_builtin_prompt(request: Request, filename: str) -> bool:
-    return (_prompt_dir(request) / filename).is_file()
-
-
-def _is_builtin_persona(request: Request, filename: str) -> bool:
-    return (_persona_dir(request) / filename).is_file()
+    paths = request.app.state.paths
+    ensure_prompt_storage(paths)
+    return paths.prompt_dir
 
 
 def _read_prompt_content(request: Request, filename: str) -> tuple[str, bool]:
-    public_file = _public_prompt_dir(request) / filename
-    if public_file.is_file():
-        return public_file.read_text(encoding="utf-8"), False
-    builtin = _prompt_dir(request) / filename
-    if builtin.is_file():
-        return builtin.read_text(encoding="utf-8"), True
+    prompt_file = _prompt_dir(request) / filename
+    if prompt_file.is_file():
+        return prompt_file.read_text(encoding="utf-8"), False
     raise HTTPException(status_code=404, detail="未找到提示词文件")
 
 
 def _read_persona_content(request: Request, filename: str) -> tuple[str, bool]:
-    public_file = _public_persona_dir(request) / filename
-    if public_file.is_file():
-        return public_file.read_text(encoding="utf-8"), False
-    builtin = _persona_dir(request) / filename
-    if builtin.is_file():
-        return builtin.read_text(encoding="utf-8"), True
+    prompt_file = _prompt_dir(request) / filename
+    if prompt_file.is_file():
+        return prompt_file.read_text(encoding="utf-8"), False
     raise HTTPException(status_code=404, detail="未找到人格文件")
 
 
@@ -113,16 +85,10 @@ def _build_route_config(items: list[PromptModuleItemPayload], available_files: s
 
 
 def _public_editor_config(request: Request) -> dict[str, object]:
-    prompt_builtin = sorted(path.name for path in _prompt_dir(request).glob("*.md"))
-    prompt_public = sorted(path.name for path in _public_prompt_dir(request).glob("*.md"))
-    persona_builtin = sorted(path.name for path in _persona_dir(request).glob("*.md"))
-    persona_public = sorted(path.name for path in _public_persona_dir(request).glob("*.md"))
+    prompts = sorted(path.name for path in _prompt_dir(request).glob("*.md"))
     settings = request.app.state.settings
     return {
-        "prompt_builtin": prompt_builtin,
-        "prompt_public": prompt_public,
-        "persona_builtin": persona_builtin,
-        "persona_public": persona_public,
+        "prompts": prompts,
         "available_module_files": sorted(available_module_files(request.app.state.paths)),
         "prompt_modules": {
             "planner": [{"name": module.name, "enabled": module.enabled} for module in settings.prompt_modules.planner.modules],
@@ -164,13 +130,13 @@ def public_editor_index() -> str:
     <div class="card">
       <h1>🌐 公网编辑端（受限）</h1>
       <div class="hint">
-        本界面用于论坛用户协作编辑。<b>内置历史 md 文件全部只读</b>，只能新建/修改 <code>prompts_public/</code> 与 <code>personas_public/</code> 下的文件。<br/>
+        本界面用于论坛用户协作编辑。提示词与人格文件已统一到 <code>prompts/</code>，所有变更会自动备份到 <code>prompts_backup/</code>。<br/>
         修改会影响后续模型链路，请先阅读下方教程。
       </div>
       <div class="warn">
         <b>使用提醒教程（必读）</b><br/>
-        1) 先在“只读列表”查看内置文件作为参考模板；<br/>
-        2) 需要改内容时，请新建同名以外的新文件（避免覆盖核心规则）；<br/>
+        1) 先在列表中选择已有文件作为模板；<br/>
+        2) 需要改内容时，可直接保存到同名文件或新建文件；<br/>
         3) 在“提示词模块编排”里把你的新文件加入对应链路并确认启用状态；<br/>
         4) 提交后观察运行效果，不要在高峰期频繁切换模块；<br/>
         5) 若结果异常，优先禁用新增模块回滚。
@@ -180,33 +146,29 @@ def public_editor_index() -> str:
     <div class="card grid">
       <div>
         <h2>📝 提示词编辑</h2>
-        <label>内置（只读）</label>
-        <select id="prompt-builtin"></select>
-        <label>自定义（可写）</label>
-        <select id="prompt-public"></select>
+        <label>提示词文件（prompts/）</label>
+        <select id="prompt-list"></select>
         <label>新建文件名（.md）</label>
         <input id="prompt-new" placeholder="例如: my_forum_style.md" />
         <label>内容</label>
         <textarea id="prompt-content"></textarea>
         <div style="margin-top:10px;">
           <button type="button" onclick="loadPrompt()">加载</button>
-          <button type="button" onclick="savePrompt()">保存到 public</button>
+          <button type="button" onclick="savePrompt()">保存到 prompts</button>
           <span id="prompt-status" class="status"></span>
         </div>
       </div>
       <div>
         <h2>🎭 人格编辑</h2>
-        <label>内置（只读）</label>
-        <select id="persona-builtin"></select>
-        <label>自定义（可写）</label>
-        <select id="persona-public"></select>
+        <label>人格文件（与 prompts 合并）</label>
+        <select id="persona-list"></select>
         <label>新建文件名（.md）</label>
         <input id="persona-new" placeholder="例如: helper_public.md" />
         <label>内容</label>
         <textarea id="persona-content"></textarea>
         <div style="margin-top:10px;">
           <button type="button" onclick="loadPersona()">加载</button>
-          <button type="button" onclick="savePersona()">保存到 public</button>
+          <button type="button" onclick="savePersona()">保存到 prompts</button>
           <span id="persona-status" class="status"></span>
         </div>
       </div>
@@ -214,7 +176,7 @@ def public_editor_index() -> str:
 
     <div class="card">
       <h2>🧩 提示词模块编排（同步到主配置）</h2>
-      <div class="hint">可把内置或 public 新文件编入 planner / replyer / memory。若引用不存在文件会被拒绝。</div>
+      <div class="hint">可把 prompts/ 中的任意文件编入 planner / replyer / memory。若引用不存在文件会被拒绝。</div>
       <label>planner (逗号分隔 md 文件名)</label>
       <input id="planner-modules" />
       <label>replyer (逗号分隔 md 文件名)</label>
@@ -253,47 +215,41 @@ def public_editor_index() -> str:
       const res = await fetch('/public/config');
       const data = await res.json();
       configCache = data;
-      asOptions('prompt-builtin', data.prompt_builtin || []);
-      asOptions('prompt-public', data.prompt_public || []);
-      asOptions('persona-builtin', data.persona_builtin || []);
-      asOptions('persona-public', data.persona_public || []);
+      asOptions('prompt-list', data.prompts || []);
+      asOptions('persona-list', data.prompts || []);
       document.getElementById('planner-modules').value = (data.prompt_modules.planner || []).map(x => x.name).join(', ');
       document.getElementById('replyer-modules').value = (data.prompt_modules.replyer || []).map(x => x.name).join(', ');
       document.getElementById('memory-modules').value = (data.prompt_modules.memory || []).map(x => x.name).join(', ');
     }
     async function loadPrompt() {
-      const publicName = document.getElementById('prompt-public').value;
-      const builtinName = document.getElementById('prompt-builtin').value;
-      const target = publicName || builtinName;
+      const target = document.getElementById('prompt-list').value;
       const res = await fetch(`/public/prompts/${encodeURIComponent(target)}`);
       const data = await res.json();
       document.getElementById('prompt-content').value = data.content || '';
-      setStatus('prompt-status', data.readonly ? '已加载内置只读文件' : '已加载 public 文件');
+      setStatus('prompt-status', '已加载 prompts 文件');
     }
     async function savePrompt() {
       const newName = (document.getElementById('prompt-new').value || '').trim();
-      const selectedPublic = document.getElementById('prompt-public').value;
-      const filename = newName || selectedPublic;
-      if (!filename) { setStatus('prompt-status', '请输入新文件名或选择 public 文件', true); return; }
+      const selected = document.getElementById('prompt-list').value;
+      const filename = newName || selected;
+      if (!filename) { setStatus('prompt-status', '请输入新文件名或选择文件', true); return; }
       const res = await fetch(`/public/prompts/${encodeURIComponent(filename)}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({content: document.getElementById('prompt-content').value}) });
       if (!res.ok) { const data = await res.json(); setStatus('prompt-status', data.detail || '保存失败', true); return; }
       setStatus('prompt-status', '保存成功');
       await loadConfig();
     }
     async function loadPersona() {
-      const publicName = document.getElementById('persona-public').value;
-      const builtinName = document.getElementById('persona-builtin').value;
-      const target = publicName || builtinName;
+      const target = document.getElementById('persona-list').value;
       const res = await fetch(`/public/personas/${encodeURIComponent(target)}`);
       const data = await res.json();
       document.getElementById('persona-content').value = data.content || '';
-      setStatus('persona-status', data.readonly ? '已加载内置只读文件' : '已加载 public 文件');
+      setStatus('persona-status', '已加载 prompts 文件');
     }
     async function savePersona() {
       const newName = (document.getElementById('persona-new').value || '').trim();
-      const selectedPublic = document.getElementById('persona-public').value;
-      const filename = newName || selectedPublic;
-      if (!filename) { setStatus('persona-status', '请输入新文件名或选择 public 文件', true); return; }
+      const selected = document.getElementById('persona-list').value;
+      const filename = newName || selected;
+      if (!filename) { setStatus('persona-status', '请输入新文件名或选择文件', true); return; }
       const res = await fetch(`/public/personas/${encodeURIComponent(filename)}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({content: document.getElementById('persona-content').value}) });
       if (!res.ok) { const data = await res.json(); setStatus('persona-status', data.detail || '保存失败', true); return; }
       setStatus('persona-status', '保存成功');
@@ -328,22 +284,16 @@ def get_public_config(request: Request) -> dict[str, object]:
     return _public_editor_config(request)
 
 
-@router.get("/prompts", summary="读取提示词列表（内置只读 + public 可写）")
+@router.get("/prompts", summary="读取提示词列表")
 def list_public_prompts(request: Request) -> dict[str, object]:
     data = _public_editor_config(request)
-    return {
-        "builtin": data["prompt_builtin"],
-        "public": data["prompt_public"],
-    }
+    return {"files": data["prompts"]}
 
 
-@router.get("/personas", summary="读取人格列表（内置只读 + public 可写）")
+@router.get("/personas", summary="读取人格列表（与 prompts 合并）")
 def list_public_personas(request: Request) -> dict[str, object]:
     data = _public_editor_config(request)
-    return {
-        "builtin": data["persona_builtin"],
-        "public": data["persona_public"],
-    }
+    return {"files": data["prompts"]}
 
 
 @router.get("/memory", summary="只读记忆")
@@ -355,38 +305,44 @@ def get_public_memory(request: Request) -> dict[str, object]:
     }
 
 
-@router.get("/prompts/{filename}", summary="读取提示词（内置只读 + public 可写）")
+@router.get("/prompts/{filename}", summary="读取提示词")
 def get_public_prompt(filename: str, request: Request) -> dict[str, object]:
     safe = _normalize_markdown_filename(filename)
     content, readonly = _read_prompt_content(request, safe)
     return {"file": safe, "content": content, "readonly": readonly}
 
 
-@router.put("/prompts/{filename}", summary="写入 public 提示词")
+@router.put("/prompts/{filename}", summary="写入提示词（写入 prompts 并自动备份）")
 def save_public_prompt(filename: str, payload: MarkdownContentPayload, request: Request) -> dict[str, object]:
     safe = _normalize_markdown_filename(filename)
-    if _is_builtin_prompt(request, safe):
-        raise HTTPException(status_code=403, detail="内置提示词只读，请使用新文件名保存到 prompts_public")
-    target = _public_prompt_dir(request) / safe
-    target.write_text(payload.content, encoding="utf-8")
-    return {"file": safe, "content": payload.content, "stored_in": PUBLIC_PROMPTS_DIRNAME}
+    target, backup = write_prompt_file_with_backup(request.app.state.paths, safe, payload.content)
+    return {
+        "file": safe,
+        "content": payload.content,
+        "stored_in": "prompts",
+        "stored_path": str(target.parent),
+        "backup_path": str(backup),
+    }
 
 
-@router.get("/personas/{filename}", summary="读取人格（内置只读 + public 可写）")
+@router.get("/personas/{filename}", summary="读取人格（与 prompts 合并）")
 def get_public_persona(filename: str, request: Request) -> dict[str, object]:
     safe = _normalize_markdown_filename(filename)
     content, readonly = _read_persona_content(request, safe)
     return {"file": safe, "content": content, "readonly": readonly}
 
 
-@router.put("/personas/{filename}", summary="写入 public 人格")
+@router.put("/personas/{filename}", summary="写入人格（写入 prompts 并自动备份）")
 def save_public_persona(filename: str, payload: MarkdownContentPayload, request: Request) -> dict[str, object]:
     safe = _normalize_markdown_filename(filename)
-    if _is_builtin_persona(request, safe):
-        raise HTTPException(status_code=403, detail="内置人格只读，请使用新文件名保存到 personas_public")
-    target = _public_persona_dir(request) / safe
-    target.write_text(payload.content, encoding="utf-8")
-    return {"file": safe, "content": payload.content, "stored_in": PUBLIC_PERSONAS_DIRNAME}
+    target, backup = write_prompt_file_with_backup(request.app.state.paths, safe, payload.content)
+    return {
+        "file": safe,
+        "content": payload.content,
+        "stored_in": "prompts",
+        "stored_path": str(target.parent),
+        "backup_path": str(backup),
+    }
 
 
 @router.put("/config/prompt-modules", summary="更新提示词模块编排")

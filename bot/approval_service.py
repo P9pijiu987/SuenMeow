@@ -5,6 +5,7 @@ from typing import Awaitable
 from typing import Callable
 
 from bot.forum_client import ForumClient
+from bot.replyer import Replyer
 from bot.settings import Settings
 from db.repositories import Database
 
@@ -70,8 +71,11 @@ class ApprovalService:
         raise RuntimeError(f"pending reply {pending_reply_id} disappeared after reject")
 
     async def _reply(self, topic_id: int, draft_content: str, target_post_number: int | None) -> dict[str, Any]:
+        sanitized = Replyer.sanitize_reply_text(draft_content)
+        if not sanitized:
+            raise RuntimeError("pending reply content is empty after sanitization")
         if self._send_reply is not None:
-            return await self._send_reply(topic_id, draft_content, target_post_number)
+            return await self._send_reply(topic_id, sanitized, target_post_number)
 
         forum_client = ForumClient(
             self.settings.forum,
@@ -80,6 +84,6 @@ class ApprovalService:
         )
         try:
             await forum_client.login()
-            return await forum_client.reply(topic_id, draft_content, target_post_number)
+            return await forum_client.reply(topic_id, sanitized, target_post_number)
         finally:
             await forum_client.aclose()

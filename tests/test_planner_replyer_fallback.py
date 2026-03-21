@@ -78,8 +78,14 @@ async def test_replyer_falls_back_without_llm() -> None:
             llm_client=None,
         )),
         context="ctx",
-        persona_text="# Core Persona\n\nObservant",
+        persona_text="# Core Persona\n\nRole: Suen (admin)",
         llm_client=None,
     )
     assert draft.skipped is False
     assert "alice" in draft.content
+    assert "Role:" not in draft.content
+
+
+def test_replyer_sanitize_reply_text_filters_internal_prefixes() -> None:
+    content = "Role: Suen\n\n@alice hi\nPlanner: hidden\nfinal"
+    assert Replyer.sanitize_reply_text(content) == "@alice hi\nfinal"

@@ -5,6 +5,9 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from bot.settings import ensure_prompt_storage
+from bot.settings import write_prompt_file_with_backup
+
 
 router = APIRouter(prefix="/prompts", tags=["提示词"])
 
@@ -29,13 +32,17 @@ def _resolve_existing_markdown_file(base_dir: Path, filename: str) -> Path:
 
 @router.get("", summary="查看提示词文件列表")
 def list_prompts(request: Request) -> dict[str, object]:
-    prompt_dir = request.app.state.paths.root / "prompts"
+    paths = request.app.state.paths
+    ensure_prompt_storage(paths)
+    prompt_dir = paths.prompt_dir
     return {"files": sorted(path.name for path in prompt_dir.glob("*.md"))}
 
 
 @router.get("/{filename}", summary="查看提示词文件")
 def get_prompt(filename: str, request: Request) -> dict[str, object]:
-    prompt_dir = request.app.state.paths.root / "prompts"
+    paths = request.app.state.paths
+    ensure_prompt_storage(paths)
+    prompt_dir = paths.prompt_dir
     path = _resolve_existing_markdown_file(prompt_dir, filename)
     return {
         "file": filename,
@@ -45,9 +52,11 @@ def get_prompt(filename: str, request: Request) -> dict[str, object]:
 
 @router.put("/{filename}", summary="创建或更新提示词文件")
 def update_prompt(filename: str, payload: MarkdownContentPayload, request: Request) -> dict[str, object]:
-    prompt_dir = request.app.state.paths.root / "prompts"
+    paths = request.app.state.paths
+    ensure_prompt_storage(paths)
+    prompt_dir = paths.prompt_dir
     path = _normalize_markdown_file(prompt_dir, filename)
-    path.write_text(payload.content, encoding="utf-8")
+    _, _ = write_prompt_file_with_backup(paths, path.name, payload.content)
     return {
         "file": filename,
         "content": payload.content,

@@ -8,12 +8,10 @@
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
-如需持久化并避免 pull/rebuild 覆盖自定义提示词与人格文件，请在宿主机维护以下目录并通过 compose 挂载：
+如需持久化并避免 pull/rebuild 覆盖提示词与人格内容（现已统一目录），请在宿主机维护以下目录并通过 compose 挂载：
 
 - `prompts/`
-- `personas/`
-- `prompts_public/`
-- `personas_public/`
+- `prompts_backup/`
 
 ## 运行模式切换
 

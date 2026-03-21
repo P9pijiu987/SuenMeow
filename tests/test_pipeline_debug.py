@@ -104,16 +104,14 @@ async def test_debug_topic_returns_full_prompt_payload(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_debug_topic_uses_configured_prompt_module_order_and_enabled_flags(tmp_path: Path) -> None:
     prompt_dir = tmp_path / "prompts"
-    persona_dir = tmp_path / "personas"
     _ = prompt_dir.mkdir()
-    _ = persona_dir.mkdir()
     _ = (prompt_dir / "planner.md").write_text("planner system", encoding="utf-8")
     _ = (prompt_dir / "replyer.md").write_text("replyer system", encoding="utf-8")
     _ = (prompt_dir / "style_rules.md").write_text("style rules", encoding="utf-8")
     _ = (prompt_dir / "safety_rules.md").write_text("safety rules", encoding="utf-8")
     _ = (prompt_dir / "memory_user_update.md").write_text("memory user rules", encoding="utf-8")
-    _ = (persona_dir / "core.md").write_text("core persona", encoding="utf-8")
-    _ = (persona_dir / "catgirl.md").write_text("catgirl persona", encoding="utf-8")
+    _ = (prompt_dir / "core.md").write_text("core persona", encoding="utf-8")
+    _ = (prompt_dir / "catgirl.md").write_text("catgirl persona", encoding="utf-8")
 
     database = Database(tmp_path / "test.sqlite3")
     database.initialize()
@@ -121,7 +119,7 @@ async def test_debug_topic_uses_configured_prompt_module_order_and_enabled_flags
         context_builder=ContextBuilder(planner_max_posts=20, replyer_max_posts=10),
         planner=Planner(),
         replyer=Replyer(),
-        persona_loader=PersonaLoader(persona_dir),
+        persona_loader=PersonaLoader(prompt_dir),
         prompt_loader=PromptLoader(prompt_dir),
         llm_client=LlmClient(
             providers={"default": ProviderConfig(base_url="https://example.com", api_key="replace_me", timeout_seconds=10)},
@@ -170,15 +168,13 @@ async def test_debug_topic_uses_configured_prompt_module_order_and_enabled_flags
 @pytest.mark.anyio
 async def test_debug_topic_allows_persona_modules_in_replyer_chain_without_duplicate_core(tmp_path: Path) -> None:
     prompt_dir = tmp_path / "prompts"
-    persona_dir = tmp_path / "personas"
     _ = prompt_dir.mkdir()
-    _ = persona_dir.mkdir()
     _ = (prompt_dir / "replyer.md").write_text("replyer system", encoding="utf-8")
     _ = (prompt_dir / "planner.md").write_text("planner system", encoding="utf-8")
     _ = (prompt_dir / "safety_rules.md").write_text("safety rules", encoding="utf-8")
     _ = (prompt_dir / "memory_user_update.md").write_text("memory user rules", encoding="utf-8")
-    _ = (persona_dir / "core.md").write_text("core persona", encoding="utf-8")
-    _ = (persona_dir / "catgirl.md").write_text("catgirl persona", encoding="utf-8")
+    _ = (prompt_dir / "core.md").write_text("core persona", encoding="utf-8")
+    _ = (prompt_dir / "catgirl.md").write_text("catgirl persona", encoding="utf-8")
 
     database = Database(tmp_path / "test.sqlite3")
     database.initialize()
@@ -186,7 +182,7 @@ async def test_debug_topic_allows_persona_modules_in_replyer_chain_without_dupli
         context_builder=ContextBuilder(planner_max_posts=20, replyer_max_posts=10),
         planner=Planner(),
         replyer=Replyer(),
-        persona_loader=PersonaLoader(persona_dir),
+        persona_loader=PersonaLoader(prompt_dir),
         prompt_loader=PromptLoader(prompt_dir),
         llm_client=LlmClient(
             providers={"default": ProviderConfig(base_url="https://example.com", api_key="replace_me", timeout_seconds=10)},
@@ -220,12 +216,10 @@ async def test_debug_topic_allows_persona_modules_in_replyer_chain_without_dupli
 @pytest.mark.anyio
 async def test_debug_topic_raises_when_enabled_prompt_module_is_missing(tmp_path: Path) -> None:
     prompt_dir = tmp_path / "prompts"
-    persona_dir = tmp_path / "personas"
     _ = prompt_dir.mkdir()
-    _ = persona_dir.mkdir()
     _ = (prompt_dir / "replyer.md").write_text("replyer system", encoding="utf-8")
     _ = (prompt_dir / "memory_user_update.md").write_text("memory user rules", encoding="utf-8")
-    _ = (persona_dir / "core.md").write_text("core persona", encoding="utf-8")
+    _ = (prompt_dir / "core.md").write_text("core persona", encoding="utf-8")
 
     database = Database(tmp_path / "test.sqlite3")
     database.initialize()
@@ -233,7 +227,7 @@ async def test_debug_topic_raises_when_enabled_prompt_module_is_missing(tmp_path
         context_builder=ContextBuilder(planner_max_posts=20, replyer_max_posts=10),
         planner=Planner(),
         replyer=Replyer(),
-        persona_loader=PersonaLoader(persona_dir),
+        persona_loader=PersonaLoader(prompt_dir),
         prompt_loader=PromptLoader(prompt_dir),
         llm_client=LlmClient(
             providers={"default": ProviderConfig(base_url="https://example.com", api_key="replace_me", timeout_seconds=10)},
@@ -267,11 +261,11 @@ def test_prompt_loader_compose_raises_when_file_missing(tmp_path: Path) -> None:
 
 
 def test_persona_loader_compose_raises_when_file_missing(tmp_path: Path) -> None:
-    persona_dir = tmp_path / "personas"
-    _ = persona_dir.mkdir()
-    _ = (persona_dir / "core.md").write_text("core persona", encoding="utf-8")
+    prompt_dir = tmp_path / "prompts"
+    _ = prompt_dir.mkdir()
+    _ = (prompt_dir / "core.md").write_text("core persona", encoding="utf-8")
 
-    loader = PersonaLoader(persona_dir)
+    loader = PersonaLoader(prompt_dir)
 
     with pytest.raises(ValueError, match="Persona files not found: helper.md"):
         _ = loader.compose(["core", "helper"], always_include_core=True)

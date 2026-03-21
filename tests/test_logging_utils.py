@@ -13,9 +13,11 @@ def test_configure_logging_creates_file(tmp_path) -> None:
 
         configure_logging(tmp_path)
         logging.getLogger("test").info("hello")
+        logging.getLogger("bot.pipeline").info("pipeline message")
         for handler in root_logger.handlers:
             handler.flush()
         assert (tmp_path / "latest.log").exists()
+        assert (tmp_path / "reply.log").exists()
     finally:
         for handler in list(root_logger.handlers):
             root_logger.removeHandler(handler)

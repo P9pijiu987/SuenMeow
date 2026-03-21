@@ -8,17 +8,15 @@ from bot.settings import available_module_files
 
 def _write_prompt_and_persona_files(root: Path) -> None:
     prompts_dir = root / "prompts"
-    personas_dir = root / "personas"
     _ = prompts_dir.mkdir()
-    _ = personas_dir.mkdir()
     _ = (prompts_dir / "planner.md").write_text("planner", encoding="utf-8")
     _ = (prompts_dir / "replyer.md").write_text("replyer", encoding="utf-8")
     _ = (prompts_dir / "style_rules.md").write_text("style", encoding="utf-8")
     _ = (prompts_dir / "safety_rules.md").write_text("safety", encoding="utf-8")
     _ = (prompts_dir / "memory_user_update.md").write_text("memory user", encoding="utf-8")
     _ = (prompts_dir / "memory_self_update.md").write_text("memory self", encoding="utf-8")
-    _ = (personas_dir / "core.md").write_text("core", encoding="utf-8")
-    _ = (personas_dir / "catgirl.md").write_text("catgirl", encoding="utf-8")
+    _ = (prompts_dir / "core.md").write_text("core", encoding="utf-8")
+    _ = (prompts_dir / "catgirl.md").write_text("catgirl", encoding="utf-8")
 
 
 def _write_base_config(root: Path) -> Path:
@@ -181,12 +179,21 @@ def test_app_paths_support_environment_overrides(tmp_path: Path, monkeypatch: py
     monkeypatch.setenv("SUENMEOW_CONFIG_DIR", "deploy-config")
     monkeypatch.setenv("SUENMEOW_DATA_DIR", str(root / "shared-data"))
     monkeypatch.setenv("SUENMEOW_LOG_DIR", "runtime-logs")
+    monkeypatch.setenv("SUENMEOW_PROMPT_DIR", "runtime-prompts")
+    monkeypatch.setenv("SUENMEOW_PROMPT_BACKUP_DIR", "runtime-prompts-backup")
 
     paths = AppPaths.from_root(root)
 
     assert paths.config_dir == root / "deploy-config"
     assert paths.data_dir == root / "shared-data"
     assert paths.log_dir == root / "runtime-logs"
+    assert paths.prompt_dir == root / "runtime-prompts"
+    assert paths.prompt_backup_dir == root / "runtime-prompts-backup"
+    assert paths.legacy_prompt_source_dirs == (
+        root / "personas",
+        root / "prompts_public",
+        root / "personas_public",
+    )
     assert paths.database_path == root / "shared-data" / "suenmeow.sqlite3"
 
 
@@ -195,23 +202,35 @@ def test_app_paths_default_to_root_directories_when_env_missing(tmp_path: Path, 
     monkeypatch.delenv("SUENMEOW_CONFIG_DIR", raising=False)
     monkeypatch.delenv("SUENMEOW_DATA_DIR", raising=False)
     monkeypatch.delenv("SUENMEOW_LOG_DIR", raising=False)
+    monkeypatch.delenv("SUENMEOW_PROMPT_DIR", raising=False)
+    monkeypatch.delenv("SUENMEOW_PROMPT_BACKUP_DIR", raising=False)
 
     paths = AppPaths.from_root(root)
 
     assert paths.config_dir == root / "config"
     assert paths.data_dir == root / "data"
     assert paths.log_dir == root / "logs"
+    assert paths.prompt_dir == root / "prompts"
+    assert paths.prompt_backup_dir == root / "prompts_backup"
+    assert paths.legacy_prompt_source_dirs == (
+        root / "personas",
+        root / "prompts_public",
+        root / "personas_public",
+    )
     assert paths.database_path == root / "data" / "suenmeow.sqlite3"
 
 
-def test_available_module_files_includes_public_directories(tmp_path: Path) -> None:
+def test_available_module_files_includes_legacy_sources_after_merge(tmp_path: Path) -> None:
     root = tmp_path
     _ = _write_base_config(root)
+    _ = (root / "personas").mkdir()
     _ = (root / "prompts_public").mkdir()
     _ = (root / "personas_public").mkdir()
+    _ = (root / "personas" / "legacy_persona.md").write_text("legacy", encoding="utf-8")
     _ = (root / "prompts_public" / "public_prompt.md").write_text("p", encoding="utf-8")
     _ = (root / "personas_public" / "public_persona.md").write_text("x", encoding="utf-8")
 
     files = available_module_files(AppPaths.from_root(root))
+    assert "legacy_persona.md" in files
     assert "public_prompt.md" in files
     assert "public_persona.md" in files
