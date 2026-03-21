@@ -99,8 +99,6 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
     @app.get("/", summary="首页", response_class=HTMLResponse)
     def index() -> str:
         prompt_dir = paths.prompt_dir
-        persona_dir = paths.prompt_dir
-        prompt_modules_hint = "提示词与人格文件已统一存放于 prompts/，所有编辑都会自动备份到 prompts_backup/。"
         editable_config_options = "".join(
             f'<option value="{name}">{name}</option>'
             for name in (
@@ -203,9 +201,6 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
         prompt_options = "".join(
             f'<option value="{path.name}">{path.name}</option>' for path in sorted(prompt_dir.glob("*.md"))
         )
-        persona_options = "".join(
-            f'<option value="{path.name}">{path.name}</option>' for path in sorted(persona_dir.glob("*.md"))
-        )
         return f"""
 <!doctype html>
 <html lang="zh-CN">
@@ -221,12 +216,13 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
     .header h1 {{ margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.5px; }}
     .links a {{ color: var(--primary); text-decoration: none; margin-left: 16px; font-size: 14px; font-weight: 500; }}
     .links a:hover {{ text-decoration: underline; }}
-    .container {{ max-width: 1400px; margin: 32px auto; padding: 0 32px; display: grid; grid-template-columns: repeat(12, 1fr); gap: 24px; }}
+    .container {{ max-width: 1440px; margin: 32px auto; padding: 0 32px; display: grid; grid-template-columns: repeat(12, 1fr); gap: 24px; }}
     .card {{ background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03); display: flex; flex-direction: column; }}
     .col-span-4 {{ grid-column: span 4; }}
     .col-span-6 {{ grid-column: span 6; }}
     .col-span-8 {{ grid-column: span 8; }}
     .col-span-12 {{ grid-column: span 12; }}
+    .compact-stack {{ display: flex; flex-direction: column; gap: 24px; height: 100%; }}
     @media (max-width: 1024px) {{ .col-span-4, .col-span-6, .col-span-8 {{ grid-column: span 12; }} }}
     .card-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }}
     .card-header h2 {{ margin: 0; font-size: 18px; font-weight: 600; }}
@@ -246,7 +242,7 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
     .flex-row {{ display: flex; gap: 12px; align-items: flex-end; }}
     .flex-row > * {{ flex: 1; }}
     .flex-row > .auto-width {{ flex: 0 0 auto; margin-bottom: 2px; }}
-    .module-route-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }}
+    .module-route-grid {{ display: grid; grid-template-columns: 1fr; gap: 16px; }}
     .module-list {{ display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }}
     .module-item {{ display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }}
     .module-item.empty {{ color: var(--muted); justify-content: center; font-size: 13px; }}
@@ -321,9 +317,10 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
       </div>
     </section>
 
-    <!-- Row 1: Configurations -->
-    <section class="card col-span-4">
-      <div class="card-header"><h2>📝 提示词编辑 (Prompts)</h2></div>
+    <!-- Row 1: Text editing / authoring (large panels) -->
+    <section class="card col-span-8">
+      <div class="card-header"><h2>📝 提示词编辑 (Prompt Editor)</h2></div>
+      <p class="section-note">提示词与人格已合并到同一目录，这里统一编辑 <code>prompts/</code> 文件。</p>
       <label for="prompt-file">选择文件</label>
       <select id="prompt-file">{prompt_options}</select>
       <label for="prompt-new-file">或新建文件名</label>
@@ -336,75 +333,63 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
       </div>
     </section>
 
-    <section class="card col-span-4">
-      <div class="card-header"><h2>🎭 人格编辑 (Personas)</h2></div>
-      <label for="persona-file">选择文件</label>
-      <select id="persona-file">{persona_options}</select>
-      <label for="persona-new-file">或新建文件名</label>
-      <input id="persona-new-file" type="text" placeholder="例如: helper.md" />
-      <label for="persona-content">内容</label>
-      <textarea id="persona-content" placeholder="载入中..."></textarea>
-      <div class="btn-group">
-        <button type="button" onclick="savePersona()">💾 保存 / 创建人格</button>
-        <div id="persona-status" class="status"></div>
-      </div>
-    </section>
-
-    <section class="card col-span-4">
-      <div class="card-header"><h2>🧠 自我记忆 (Self Memory)</h2></div>
-      <label for="self-memory">当前记忆状态</label>
-      <textarea id="self-memory" placeholder="暂无记忆..."></textarea>
-      <div class="btn-group">
-        <button type="button" onclick="saveSelfMemory()">💾 保存记忆</button>
-        <div id="self-memory-status" class="status"></div>
-      </div>
-    </section>
-
-    <section class="card col-span-12">
-      <div class="card-header"><h2>🧩 提示词模块编排 (Prompt Modules)</h2></div>
-      <p class="section-note">{prompt_modules_hint}</p>
-      <div class="module-route-grid">
-        <div>
-          <label for="planner-add-module">Planner 模块链</label>
-          <div id="planner-modules" class="module-list"></div>
-          <div class="flex-row">
-            <div>
-              <label for="planner-add-module">添加模块到 Planner</label>
-              <select id="planner-add-module"></select>
+    <div class="col-span-4 compact-stack">
+      <section class="card col-span-12" style="height: 100%;">
+        <div class="card-header"><h2>🎛️ 模块编排 (Prompt Modules)</h2></div>
+        <p class="section-note">选择并排序即可，无需大段文本编辑。</p>
+        <div class="module-route-grid">
+          <div>
+            <label for="planner-add-module">Planner 模块链</label>
+            <div id="planner-modules" class="module-list"></div>
+            <div class="flex-row">
+              <div>
+                <label for="planner-add-module">添加模块到 Planner</label>
+                <select id="planner-add-module"></select>
+              </div>
+              <button class="secondary auto-width" type="button" onclick="addPromptModule('planner')">➕ 添加</button>
             </div>
-            <button class="secondary auto-width" type="button" onclick="addPromptModule('planner')">➕ 添加</button>
+          </div>
+          <div>
+            <label for="replyer-add-module">Replyer 模块链</label>
+            <div id="replyer-modules" class="module-list"></div>
+            <div class="flex-row">
+              <div>
+                <label for="replyer-add-module">添加模块到 Replyer</label>
+                <select id="replyer-add-module"></select>
+              </div>
+              <button class="secondary auto-width" type="button" onclick="addPromptModule('replyer')">➕ 添加</button>
+            </div>
+          </div>
+          <div>
+            <label for="memory-add-module">Memory 模块链</label>
+            <div id="memory-modules" class="module-list"></div>
+            <div class="flex-row">
+              <div>
+                <label for="memory-add-module">添加模块到 Memory</label>
+                <select id="memory-add-module"></select>
+              </div>
+              <button class="secondary auto-width" type="button" onclick="addPromptModule('memory')">➕ 添加</button>
+            </div>
           </div>
         </div>
-        <div>
-          <label for="replyer-add-module">Replyer 模块链</label>
-          <div id="replyer-modules" class="module-list"></div>
-          <div class="flex-row">
-            <div>
-              <label for="replyer-add-module">添加模块到 Replyer</label>
-              <select id="replyer-add-module"></select>
-            </div>
-            <button class="secondary auto-width" type="button" onclick="addPromptModule('replyer')">➕ 添加</button>
-          </div>
+        <div class="btn-group">
+          <button type="button" onclick="savePromptModules()">💾 保存模块编排</button>
+          <div id="prompt-modules-status" class="status"></div>
         </div>
-        <div>
-          <label for="memory-add-module">Memory 模块链</label>
-          <div id="memory-modules" class="module-list"></div>
-          <div class="flex-row">
-            <div>
-              <label for="memory-add-module">添加模块到 Memory</label>
-              <select id="memory-add-module"></select>
-            </div>
-            <button class="secondary auto-width" type="button" onclick="addPromptModule('memory')">➕ 添加</button>
-          </div>
-        </div>
-      </div>
-      <div class="btn-group">
-        <button type="button" onclick="savePromptModules()">💾 保存模块编排</button>
-        <div id="prompt-modules-status" class="status"></div>
-      </div>
-    </section>
+      </section>
 
-    <!-- Row 2: User Memory & Logs -->
+      <section class="card col-span-12" style="height: 100%;">
+        <div class="card-header"><h2>🧠 自我记忆 (Self Memory)</h2></div>
+        <label for="self-memory">当前记忆状态</label>
+        <textarea id="self-memory" placeholder="暂无记忆..."></textarea>
+        <div class="btn-group">
+          <button type="button" onclick="saveSelfMemory()">💾 保存记忆</button>
+          <div id="self-memory-status" class="status"></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Row 2: reading / writing panels (large panels) -->
     <section class="card col-span-6">
       <div class="card-header"><h2>👥 用户记忆 (User Memories)</h2></div>
       <div class="flex-row">
@@ -438,39 +423,38 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
       <pre id="log-viewer" class="log-viewer">等待获取日志...</pre>
     </section>
 
-    <!-- Row 3: Pending Approvals -->
-    <section class="card col-span-12">
+    <!-- Row 3: selection / operation lists (compact panels) -->
+    <section class="card col-span-6">
       <div class="card-header">
         <h2>⏳ 待审核回复 (Pending Approvals)</h2>
         <button class="secondary" type="button" onclick="loadPendingApprovals()" style="padding: 6px 12px; margin: 0;">🔄 刷新</button>
       </div>
-      <div id="pending-approvals-container" style="display: flex; flex-direction: column; gap: 12px; max-height: 400px; overflow-y: auto; padding-right: 4px;">
+      <div id="pending-approvals-container" style="display: flex; flex-direction: column; gap: 12px; max-height: 320px; overflow-y: auto; padding-right: 4px;">
         <div class="module-item empty">等待获取待审核数据...</div>
       </div>
     </section>
 
-    <section class="card col-span-12">
+    <section class="card col-span-6">
       <div class="card-header">
         <h2>🔨 已封禁话题 (Banned Topics)</h2>
         <button class="secondary" type="button" onclick="loadBannedTopics()" style="padding: 6px 12px; margin: 0;">🔄 刷新</button>
       </div>
-      <div id="banned-topics-container" style="display: flex; flex-direction: column; gap: 12px; max-height: 280px; overflow-y: auto; padding-right: 4px;">
+      <div id="banned-topics-container" style="display: flex; flex-direction: column; gap: 12px; max-height: 320px; overflow-y: auto; padding-right: 4px;">
         <div class="module-item empty">等待获取封禁列表...</div>
       </div>
     </section>
 
-    <!-- Row 4: Pipeline Runs -->
     <section class="card col-span-12">
       <div class="card-header">
         <h2>🚀 流水线追踪 (Pipeline Runs)</h2>
         <button class="secondary" type="button" onclick="loadPipelineRuns()" style="padding: 6px 12px; margin: 0;">🔄 刷新</button>
       </div>
-      <div id="pipeline-runs-container" style="display: flex; flex-direction: column; gap: 12px; max-height: 400px; overflow-y: auto; padding-right: 4px;">
+      <div id="pipeline-runs-container" style="display: flex; flex-direction: column; gap: 12px; max-height: 320px; overflow-y: auto; padding-right: 4px;">
         <div class="module-item empty">等待获取流水线记录...</div>
       </div>
     </section>
 
-    <section class="card col-span-12">
+    <section class="card col-span-4">
       <div class="card-header"><h2>📥 话题全文导出 (Topic TXT Export)</h2></div>
       <div class="flex-row">
         <div>
@@ -533,13 +517,6 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
       setSelectOptions('prompt-file', data.files || [], preferred);
     }}
 
-    async function refreshPersonaFiles(preferred = '') {{
-      const res = await fetch('/personas');
-      if (!res.ok) throw new Error(await readErrorDetail(res, '加载人格列表失败'));
-      const data = await res.json();
-      setSelectOptions('persona-file', data.files || [], preferred);
-    }}
-
     function resolveEditorFilename(selectId, inputId) {{
       const fromInput = ensureMarkdownFilename(document.getElementById(inputId).value);
       if (fromInput) return fromInput;
@@ -580,42 +557,6 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
         document.getElementById('prompt-new-file').value = '';
         setStatus('prompt-status', '保存成功 ✓');
       }} catch (_error) {{ setStatus('prompt-status', '网络错误', true); }}
-    }}
-
-    // Personas
-    async function loadPersona() {{
-      const file = document.getElementById('persona-file').value;
-      if (!file) return;
-      try {{
-        const res = await fetch(`/personas/${{encodeURIComponent(file)}}`);
-        if (!res.ok) {{
-          setStatus('persona-status', await readErrorDetail(res, '加载失败'), true);
-          return;
-        }}
-        const data = await res.json();
-        document.getElementById('persona-content').value = data.content ?? '';
-      }} catch (_error) {{ setStatus('persona-status', '加载失败', true); }}
-    }}
-    async function savePersona() {{
-      const file = resolveEditorFilename('persona-file', 'persona-new-file');
-      const content = document.getElementById('persona-content').value;
-      if (!file) {{
-        setStatus('persona-status', '请输入文件名', true);
-        return;
-      }}
-      try {{
-        const res = await fetch(`/personas/${{encodeURIComponent(file)}}`, {{
-          method: 'PUT', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ content }})
-        }});
-        if (!res.ok) {{
-          setStatus('persona-status', await readErrorDetail(res, '保存失败 ✗'), true);
-          return;
-        }}
-        await refreshPersonaFiles(file);
-        await loadPromptModules();
-        document.getElementById('persona-new-file').value = '';
-        setStatus('persona-status', '保存成功 ✓');
-      }} catch (_error) {{ setStatus('persona-status', '网络错误', true); }}
     }}
 
     // Memories
@@ -711,7 +652,7 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
       const container = document.getElementById(`${{route}}-modules`);
       const modules = promptModuleState[route] || [];
       if (!modules.length) {{
-        container.innerHTML = '<div class="module-item empty">当前没有模块，可从 prompts 或 personas 中添加。</div>';
+        container.innerHTML = '<div class="module-item empty">当前没有模块，可从 prompts 中添加。</div>';
       }} else {{
         container.innerHTML = modules.map((module, index) => `
           <div class="module-item">
@@ -1281,12 +1222,10 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
 
     // Init
     document.getElementById('prompt-file').addEventListener('change', loadPrompt);
-    document.getElementById('persona-file').addEventListener('change', loadPersona);
     document.getElementById('editable-config-file').addEventListener('change', loadEditableConfig);
     
     // Initial loads
     refreshPromptFiles().then(() => {{ if (document.getElementById('prompt-file').value) loadPrompt(); }});
-    refreshPersonaFiles().then(() => {{ if (document.getElementById('persona-file').value) loadPersona(); }});
     loadAllMemories();
     loadPromptModules();
     loadEditableConfig();

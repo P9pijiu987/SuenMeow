@@ -512,9 +512,9 @@ def test_homepage_renders_real_chinese_admin_page(tmp_path: Path) -> None:
     assert "<title>SuenMeow Admin</title>" in text
     assert "中文管理页：可直接查看和编辑提示词、人格设定与自我记忆。" in text
     assert "提示词编辑" in text
-    assert "提示词模块编排" in text
+    assert "模块编排" in text
     assert "Memory 模块链" in text
-    assert "人格编辑" in text
+    assert "人格编辑" not in text
     assert "自我记忆" in text
     assert "用户记忆" in text
     assert "运行日志" in text
