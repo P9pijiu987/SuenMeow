@@ -6,9 +6,12 @@ from fastapi import APIRouter, Request
 from fastapi import HTTPException
 from pydantic import BaseModel
 
+from bot.persona_loader import PersonaLoader
+from bot.prompt_loader import PromptLoader
 from bot.settings import editable_config_filenames
 from bot.settings import ensure_prompt_storage
 from bot.settings import available_module_files
+from bot.settings import enabled_prompt_module_names
 from bot.settings import runtime_mode_name
 from bot.settings import Settings
 from bot.settings import PromptModuleEntry
@@ -89,6 +92,108 @@ def _build_route_config(items: list[PromptModuleItemPayload], available_files: s
     return PromptRouteConfig(modules=modules)
 
 
+def _unique_names(names: list[str]) -> list[str]:
+    seen_names: set[str] = set()
+    ordered_names: list[str] = []
+    for name in names:
+        if name in seen_names:
+            continue
+        seen_names.add(name)
+        ordered_names.append(name)
+    return ordered_names
+
+
+def _unique_text(parts: list[str]) -> str:
+    seen_parts: set[str] = set()
+    ordered_parts: list[str] = []
+    for part in parts:
+        normalized = part.strip()
+        if not normalized or normalized in seen_parts:
+            continue
+        seen_parts.add(normalized)
+        ordered_parts.append(normalized)
+    return "\n\n".join(ordered_parts)
+
+
+def _route_enabled_module_names(prompt_modules: PromptModulesConfig, route_name: str) -> list[str]:
+    if route_name == "planner":
+        route = prompt_modules.planner
+    elif route_name == "replyer":
+        route = prompt_modules.replyer
+    elif route_name == "memory":
+        route = prompt_modules.memory
+    else:
+        raise ValueError(f"Unknown prompt route: {route_name}")
+    return enabled_prompt_module_names(route)
+
+
+def _compose_route_modules(
+    route_name: str,
+    module_names: list[str],
+    prompt_loader: PromptLoader,
+    persona_loader: PersonaLoader,
+) -> str:
+    parts: list[str] = []
+    missing_names: list[str] = []
+    for name in module_names:
+        if prompt_loader.exists(name):
+            parts.append(prompt_loader.load(name).strip())
+            continue
+        if persona_loader.exists(name):
+            parts.append(persona_loader.load(name).strip())
+            continue
+        missing_names.append(name)
+    if missing_names:
+        missing_display = ", ".join(missing_names)
+        raise ValueError(f"Prompt route '{route_name}' references missing modules: {missing_display}")
+    return _unique_text(parts)
+
+
+def _configured_personas(module_names: list[str], persona_loader: PersonaLoader) -> list[str]:
+    personas = [name.removesuffix(".md") for name in module_names if persona_loader.exists(name)]
+    return _unique_names(personas)
+
+
+def _compose_final_system_prompt(
+    route_name: str,
+    prompt_modules: PromptModulesConfig,
+    prompt_loader: PromptLoader,
+    persona_loader: PersonaLoader,
+) -> str:
+    module_names = _route_enabled_module_names(prompt_modules, route_name)
+    route_prompt = _compose_route_modules(route_name, module_names, prompt_loader, persona_loader)
+    route_personas = _configured_personas(module_names, persona_loader)
+    include_core = "core" not in route_personas
+    return _unique_text([persona_loader.compose(["core"]) if include_core else "", route_prompt])
+
+
+def _final_system_prompts(request: Request) -> dict[str, str]:
+    paths = request.app.state.paths
+    settings = request.app.state.settings
+    prompt_loader = PromptLoader(paths.prompt_dir)
+    persona_loader = PersonaLoader(paths.prompt_dir)
+    return {
+        "planner": _compose_final_system_prompt(
+            "planner",
+            settings.prompt_modules,
+            prompt_loader,
+            persona_loader,
+        ),
+        "replyer": _compose_final_system_prompt(
+            "replyer",
+            settings.prompt_modules,
+            prompt_loader,
+            persona_loader,
+        ),
+        "memory": _compose_final_system_prompt(
+            "memory",
+            settings.prompt_modules,
+            prompt_loader,
+            persona_loader,
+        ),
+    }
+
+
 def _config_response(request: Request) -> dict[str, object]:
     settings = request.app.state.settings
     return {
@@ -121,6 +226,7 @@ def _config_response(request: Request) -> dict[str, object]:
         "available_persona_files": _available_persona_files(request),
         "available_module_files": _available_module_files(request),
         "prompt_modules": prompt_modules_to_dict(settings.prompt_modules),
+        "final_system_prompts": _final_system_prompts(request),
     }
 
 

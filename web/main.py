@@ -251,6 +251,10 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
     .module-actions {{ display: flex; gap: 8px; }}
     .module-actions button {{ padding: 6px 10px; font-size: 12px; }}
     .section-note {{ margin: 0 0 12px; color: var(--muted); font-size: 13px; }}
+    .prompt-preview-grid {{ display: grid; gap: 16px; }}
+    .prompt-preview-item {{ display: flex; flex-direction: column; gap: 8px; }}
+    .prompt-preview-item h3 {{ margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }}
+    .prompt-preview-box {{ margin: 0; border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--bg); white-space: pre-wrap; word-break: break-all; max-height: 280px; overflow: auto; font-size: 12px; line-height: 1.6; color: var(--text); font-family: 'Consolas', 'Monaco', monospace; }}
     @media (max-width: 1024px) {{ .module-route-grid {{ grid-template-columns: 1fr; }} }}
   </style>
 </head>
@@ -451,6 +455,28 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
       </div>
       <div id="pipeline-runs-container" style="display: flex; flex-direction: column; gap: 12px; max-height: 320px; overflow-y: auto; padding-right: 4px;">
         <div class="module-item empty">等待获取流水线记录...</div>
+      </div>
+    </section>
+
+    <section class="card col-span-12">
+      <div class="card-header">
+        <h2>📜 最终 System Prompt（完整）</h2>
+        <button class="secondary" type="button" onclick="loadPromptModules()" style="padding: 6px 12px; margin: 0;">🔄 刷新</button>
+      </div>
+      <p class="section-note">展示当前配置下三条链路实际送入模型的最终 system prompt（含 core + 已启用模块合成结果）。</p>
+      <div class="prompt-preview-grid">
+        <div class="prompt-preview-item">
+          <h3>Planner</h3>
+          <pre id="planner-system-prompt-preview" class="prompt-preview-box">(empty)</pre>
+        </div>
+        <div class="prompt-preview-item">
+          <h3>Replyer</h3>
+          <pre id="replyer-system-prompt-preview" class="prompt-preview-box">(empty)</pre>
+        </div>
+        <div class="prompt-preview-item">
+          <h3>Memory</h3>
+          <pre id="memory-system-prompt-preview" class="prompt-preview-box">(empty)</pre>
+        </div>
       </div>
     </section>
 
@@ -788,6 +814,18 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
         badges.innerHTML = html;
        }}
 
+    function hydrateFinalSystemPrompts(finalSystemPrompts) {{
+      const plannerEl = document.getElementById('planner-system-prompt-preview');
+      const replyerEl = document.getElementById('replyer-system-prompt-preview');
+      const memoryEl = document.getElementById('memory-system-prompt-preview');
+      if (!plannerEl || !replyerEl || !memoryEl) return;
+
+      const prompts = finalSystemPrompts || {{}};
+      plannerEl.textContent = prompts.planner || '(empty)';
+      replyerEl.textContent = prompts.replyer || '(empty)';
+      memoryEl.textContent = prompts.memory || '(empty)';
+    }}
+
     async function loadPromptModules() {{
       try {{
         const res = await fetch('/config');
@@ -798,6 +836,7 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
         const data = await res.json();
         hydratePromptModules(data);
         hydrateRuntimeStatus(data.runtime);
+        hydrateFinalSystemPrompts(data.final_system_prompts);
         hydrateEditableConfigOptions(data.editable_configs || []);
       }} catch (_error) {{
         setStatus('prompt-modules-status', '加载模块编排失败', true);
@@ -895,6 +934,9 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
         }}
         const data = await res.json();
         hydratePromptModules(data);
+        hydrateRuntimeStatus(data.runtime);
+        hydrateFinalSystemPrompts(data.final_system_prompts);
+        hydrateEditableConfigOptions(data.editable_configs || []);
         setStatus('prompt-modules-status', '保存成功 ✓');
       }} catch (_error) {{
         setStatus('prompt-modules-status', '网络错误', true);

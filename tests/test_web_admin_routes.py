@@ -260,6 +260,17 @@ def test_config_prompt_modules_support_read_and_update(tmp_path: Path) -> None:
             {"name": "memory_user_update.md", "enabled": True},
             {"name": "memory_self_update.md", "enabled": True},
         ]
+        assert "final_system_prompts" in data
+        assert isinstance(data["final_system_prompts"], dict)
+        assert "planner" in data["final_system_prompts"]
+        assert "replyer" in data["final_system_prompts"]
+        assert "memory" in data["final_system_prompts"]
+        assert "old core" in data["final_system_prompts"]["planner"]
+        assert "old planner" in data["final_system_prompts"]["planner"]
+        assert "old core" in data["final_system_prompts"]["replyer"]
+        assert "old replyer" in data["final_system_prompts"]["replyer"]
+        assert "old core" in data["final_system_prompts"]["memory"]
+        assert "memory user rule" in data["final_system_prompts"]["memory"]
         assert data["editable_configs"] == [
             "forum.toml",
             "models.toml",
@@ -519,6 +530,12 @@ def test_homepage_renders_real_chinese_admin_page(tmp_path: Path) -> None:
     assert "用户记忆" in text
     assert "运行日志" in text
     assert "流水线追踪" in text
+    assert "最终 System Prompt（完整）" in text
+    assert "planner-system-prompt-preview" in text
+    assert "replyer-system-prompt-preview" in text
+    assert "memory-system-prompt-preview" in text
+    assert "hydrateFinalSystemPrompts" in text
+    assert "data.final_system_prompts" in text
     assert "待审核回复" in text
     assert "运行状态 (Runtime Status)" in text
     assert "运行模式切换 (Runtime Modes)" in text
