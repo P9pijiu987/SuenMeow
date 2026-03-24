@@ -11,8 +11,9 @@ COPY db ./db
 COPY web ./web
 COPY config ./config
 COPY prompts ./prompts
-COPY personas ./personas
 COPY main.py ./
+
+RUN mkdir -p /app/personas /app/prompts_public /app/personas_public /app/prompts_backup /app/data /app/logs
 
 RUN pip install --no-cache-dir .
 
