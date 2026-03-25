@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import re
 from datetime import datetime
 from datetime import timedelta
@@ -14,6 +13,9 @@ from bot.ban_service import BanService
 from bot.context_builder import ContextBuilder
 from bot.forum_client import ForumClient
 from bot.llm_client import LlmClient
+from bot.memory_policy import extract_self_memory_update
+from bot.memory_policy import extract_user_memory_updates
+from bot.memory_policy import normalize_memory_text
 from bot.memory_service import MemoryService
 from bot.persona_loader import PersonaLoader
 from bot.planner import PlannerDecision
@@ -344,24 +346,8 @@ class Pipeline:
         return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
 
     @staticmethod
-    def _extract_confidence(value: object) -> float:
-        confidence = 0.0
-        if isinstance(value, bool):
-            confidence = float(value)
-        elif isinstance(value, int | float):
-            confidence = float(value)
-        elif isinstance(value, str):
-            try:
-                confidence = float(value)
-            except ValueError:
-                return 0.0
-        if not math.isfinite(confidence):
-            return 0.0
-        return confidence
-
-    @staticmethod
     def _normalize_memory_text(value: str) -> str:
-        return " ".join(value.split())
+        return normalize_memory_text(value)
 
     @classmethod
     def _extract_memory_command_content(cls, text: str) -> str | None:
@@ -372,43 +358,15 @@ class Pipeline:
 
     @classmethod
     def _extract_user_memory_updates(cls, payload: dict[str, object]) -> list[tuple[str, str, float]]:
-        raw_updates = payload.get("user_updates")
-        if not isinstance(raw_updates, list):
-            return []
-        updates: list[tuple[str, str, float]] = []
-        for item in raw_updates:
-            if not isinstance(item, dict):
-                continue
-            raw_username = item.get("username")
-            raw_memory = item.get("memory")
-            if not isinstance(raw_username, str) or not raw_username.strip():
-                continue
-            if not isinstance(raw_memory, str):
-                continue
-            normalized_memory = cls._normalize_memory_text(raw_memory)
-            if not normalized_memory:
-                continue
-            updates.append(
-                (
-                    raw_username.strip(),
-                    normalized_memory,
-                    cls._extract_confidence(item.get("confidence", 0.0)),
-                )
-            )
-        return updates
+        updates = extract_user_memory_updates(payload)
+        return [(update.username, update.memory_text, update.confidence) for update in updates]
 
     @classmethod
     def _extract_self_memory_update(cls, payload: dict[str, object]) -> tuple[str, float] | None:
-        raw_update = payload.get("self_update")
-        if not isinstance(raw_update, dict):
+        self_update = extract_self_memory_update(payload)
+        if self_update is None:
             return None
-        raw_memory = raw_update.get("memory")
-        if not isinstance(raw_memory, str):
-            return None
-        normalized_memory = cls._normalize_memory_text(raw_memory)
-        if not normalized_memory:
-            return None
-        return normalized_memory, cls._extract_confidence(raw_update.get("confidence", 0.0))
+        return self_update.memory_text, self_update.confidence
 
     @staticmethod
     def _build_reply_memory_block(prompt_bundle: PromptBundle) -> str:
@@ -458,31 +416,13 @@ class Pipeline:
         )
 
     def _persist_memory_payload(self, payload: dict[str, object]) -> tuple[int, bool]:
-        updated_user_count = 0
-        extracted_user_updates = self._extract_user_memory_updates(payload)
-        current_user_memories = self.memory_service.get_user_memory([username for username, _, _ in extracted_user_updates])
-        final_user_updates: dict[str, tuple[str, float]] = {}
-        for username, memory_text, confidence in extracted_user_updates:
-            if confidence < self._MEMORY_UPDATE_CONFIDENCE_THRESHOLD:
-                continue
-            current_memory = self._normalize_memory_text(current_user_memories.get(username, ""))
-            if memory_text == current_memory:
-                continue
-            final_user_updates[username] = (memory_text, confidence)
-            current_user_memories[username] = memory_text
-        for username, (memory_text, confidence) in final_user_updates.items():
-            self.memory_service.set_user_memory(username, memory_text, confidence)
-            updated_user_count += 1
-        self_memory_updated = False
-        self_memory_update = self._extract_self_memory_update(payload)
-        if self_memory_update is not None:
-            self_memory_text, self_confidence = self_memory_update
-            if self_confidence >= self._SELF_MEMORY_UPDATE_CONFIDENCE_THRESHOLD:
-                current_self_memory = self._normalize_memory_text(self.memory_service.get_self_memory())
-                if self_memory_text != current_self_memory:
-                    self.memory_service.set_self_memory(self_memory_text)
-                    self_memory_updated = True
-        return updated_user_count, self_memory_updated
+        result = self.memory_service.apply_memory_updates(
+            user_updates=extract_user_memory_updates(payload),
+            self_update=extract_self_memory_update(payload),
+            user_confidence_threshold=self._MEMORY_UPDATE_CONFIDENCE_THRESHOLD,
+            self_confidence_threshold=self._SELF_MEMORY_UPDATE_CONFIDENCE_THRESHOLD,
+        )
+        return result.updated_user_count, result.self_memory_updated
 
     def _build_memory_user_prompt(
         self,
