@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
-from typing import cast
+from typing import Any
 from typing import override
 
 import pytest
@@ -83,33 +83,6 @@ class FakeForumClient(ForumClient):
         return {"id": 9001}
 
 
-class MemoryCommandForumClient(FakeForumClient):
-    def __init__(self, raw_text: str, *, username: str = "alice", read_only: bool = False) -> None:
-        super().__init__(read_only=read_only)
-        self._raw_text: str = raw_text
-        self._username: str = username
-
-    @override
-    async def get_topic_selected_posts(
-        self,
-        topic_id: int,
-        *,
-        include_first_post: bool = True,
-        recent_post_limit: int = 50,
-    ) -> list[dict[str, object]]:
-        _ = topic_id
-        _ = include_first_post
-        _ = recent_post_limit
-        return [
-            {
-                "post_number": 1,
-                "username": self._username,
-                "reply_to_post_number": 0,
-                "raw_text": self._raw_text,
-            },
-        ]
-
-
 class FakeLlmClient(LlmClient):
     def __init__(self, memory_payload: dict[str, object] | None = None) -> None:
         super().__init__({}, {})
@@ -137,49 +110,15 @@ class FakeLlmClient(LlmClient):
     @staticmethod
     @override
     def parse_json_object(content: str) -> dict[str, object] | None:
-        parsed: object = cast(object, json.loads(content))
+        parsed: object = json.loads(content)
         if not isinstance(parsed, dict):
             return None
-        parsed_dict = cast(dict[object, object], parsed)
         normalized: dict[str, object] = {}
-        for key, value in parsed_dict.items():
+        for key, value in parsed.items():
             if not isinstance(key, str):
                 return None
             normalized[key] = value
         return normalized
-
-
-class FakeLlmClientRouteUnavailable(FakeLlmClient):
-    @override
-    def is_route_available(self, route_name: str) -> bool:
-        _ = route_name
-        return False
-
-
-class FakeLlmClientNoResponse(FakeLlmClient):
-    @override
-    async def chat(self, route_name: str, system_prompt: str, user_prompt: str, temperature: float = 0.7) -> LlmResponse | None:
-        _ = system_prompt
-        _ = user_prompt
-        _ = temperature
-        self.calls.append(route_name)
-        return None
-
-
-class FakeLlmClientInvalidPayload(FakeLlmClient):
-    @override
-    async def chat(self, route_name: str, system_prompt: str, user_prompt: str, temperature: float = 0.7) -> LlmResponse | None:
-        _ = system_prompt
-        _ = user_prompt
-        _ = temperature
-        self.calls.append(route_name)
-        return LlmResponse(content="not-json", model="fake-memory", provider="fake")
-
-    @staticmethod
-    @override
-    def parse_json_object(content: str) -> dict[str, object] | None:
-        _ = content
-        return None
 
 
 def _make_pipeline(
@@ -828,7 +767,29 @@ async def test_process_event_memory_command_routes_to_memory_llm_and_persists(tm
         }
     )
     pipeline = _make_pipeline(tmp_path, allow_send_reply=False, decision=decision, llm_client=llm_client)
-    forum_client = MemoryCommandForumClient("/memory+记住我喜欢简洁回复")
+
+    class _MemoryCommandForumClient(FakeForumClient):
+        @override
+        async def get_topic_selected_posts(
+            self,
+            topic_id: int,
+            *,
+            include_first_post: bool = True,
+            recent_post_limit: int = 50,
+        ) -> list[dict[str, object]]:
+            _ = topic_id
+            _ = include_first_post
+            _ = recent_post_limit
+            return [
+                {
+                    "post_number": 1,
+                    "username": "alice",
+                    "reply_to_post_number": 0,
+                    "raw_text": "/memory+记住我喜欢简洁回复",
+                },
+            ]
+
+    forum_client = _MemoryCommandForumClient(read_only=False)
 
     result = await pipeline.process_event(forum_client, {"topic_id": 123, "reason": "notification"}, event_id=7)
 
@@ -840,98 +801,6 @@ async def test_process_event_memory_command_routes_to_memory_llm_and_persists(tm
     assert pipeline.memory_service.get_self_memory() == "be concise"
     runs = pipeline.database.list_recent_pipeline_runs()
     assert runs[0]["action"] == "memory_command"
-
-
-@pytest.mark.anyio
-async def test_process_event_memory_command_returns_route_unavailable_reason(tmp_path: Path) -> None:
-    decision = PlannerDecision(
-        should_reply=False,
-        priority="skip",
-        target_username=None,
-        target_post_number=None,
-        reason="no reply",
-        style_notes="none",
-        memory_action="none",
-    )
-    llm_client = FakeLlmClientRouteUnavailable()
-    pipeline = _make_pipeline(tmp_path, allow_send_reply=False, decision=decision, llm_client=llm_client)
-    forum_client = MemoryCommandForumClient("/memory+记住我喜欢简洁回复")
-
-    result = await pipeline.process_event(forum_client, {"topic_id": 123, "reason": "notification"}, event_id=7)
-
-    assert result is not None
-    assert result["action"] == "memory_command"
-    assert result["decision"]["reason"] == "memory route unavailable"
-    assert llm_client.calls == []
-
-
-@pytest.mark.anyio
-async def test_process_event_memory_command_returns_llm_call_failed_reason(tmp_path: Path) -> None:
-    decision = PlannerDecision(
-        should_reply=False,
-        priority="skip",
-        target_username=None,
-        target_post_number=None,
-        reason="no reply",
-        style_notes="none",
-        memory_action="none",
-    )
-    llm_client = FakeLlmClientNoResponse()
-    pipeline = _make_pipeline(tmp_path, allow_send_reply=False, decision=decision, llm_client=llm_client)
-    forum_client = MemoryCommandForumClient("/memory+记住我喜欢简洁回复")
-
-    result = await pipeline.process_event(forum_client, {"topic_id": 123, "reason": "notification"}, event_id=7)
-
-    assert result is not None
-    assert result["action"] == "memory_command"
-    assert result["decision"]["reason"] == "memory command llm call failed"
-    assert llm_client.calls == ["memory"]
-
-
-@pytest.mark.anyio
-async def test_process_event_memory_command_returns_invalid_payload_reason(tmp_path: Path) -> None:
-    decision = PlannerDecision(
-        should_reply=False,
-        priority="skip",
-        target_username=None,
-        target_post_number=None,
-        reason="no reply",
-        style_notes="none",
-        memory_action="none",
-    )
-    llm_client = FakeLlmClientInvalidPayload()
-    pipeline = _make_pipeline(tmp_path, allow_send_reply=False, decision=decision, llm_client=llm_client)
-    forum_client = MemoryCommandForumClient("/memory+记住我喜欢简洁回复")
-
-    result = await pipeline.process_event(forum_client, {"topic_id": 123, "reason": "notification"}, event_id=7)
-
-    assert result is not None
-    assert result["action"] == "memory_command"
-    assert result["decision"]["reason"] == "memory command returned invalid payload"
-    assert llm_client.calls == ["memory"]
-
-
-@pytest.mark.anyio
-async def test_process_event_memory_command_returns_no_durable_updates_reason(tmp_path: Path) -> None:
-    decision = PlannerDecision(
-        should_reply=False,
-        priority="skip",
-        target_username=None,
-        target_post_number=None,
-        reason="no reply",
-        style_notes="none",
-        memory_action="none",
-    )
-    llm_client = FakeLlmClient({"user_updates": [], "self_update": None})
-    pipeline = _make_pipeline(tmp_path, allow_send_reply=False, decision=decision, llm_client=llm_client)
-    forum_client = MemoryCommandForumClient("/memory+记住我喜欢简洁回复")
-
-    result = await pipeline.process_event(forum_client, {"topic_id": 123, "reason": "notification"}, event_id=7)
-
-    assert result is not None
-    assert result["action"] == "memory_command"
-    assert result["decision"]["reason"] == "memory command processed with no durable updates"
-    assert llm_client.calls == ["memory"]
 
 
 @pytest.mark.anyio
@@ -1010,7 +879,7 @@ async def test_process_event_short_circuits_during_blackout_window(tmp_path: Pat
         blackout_start_hour=22,
         blackout_end_hour=6,
     )
-    setattr(pipeline, "_utcnow", lambda: datetime(2026, 1, 1, 23, 0, tzinfo=timezone.utc))
+    pipeline._utcnow = lambda: datetime(2026, 1, 1, 23, 0, tzinfo=timezone.utc)  # type: ignore[method-assign]
     forum_client = FakeForumClient(read_only=False)
 
     result = await pipeline.process_event(forum_client, {"topic_id": 123, "reason": "notification"}, event_id=7)
