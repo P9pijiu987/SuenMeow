@@ -516,8 +516,6 @@ class Pipeline:
             memory_prompts["user"],
             temperature=0.2,
         )
-        if response is None:
-            return
         payload = self.llm_client.parse_json_object(response.content)
         if not isinstance(payload, dict):
             return
@@ -547,8 +545,6 @@ class Pipeline:
             memory_user_prompt,
             temperature=0.2,
         )
-        if response is None:
-            return "memory command llm call failed"
         payload = self.llm_client.parse_json_object(response.content)
         if not isinstance(payload, dict):
             return "memory command returned invalid payload"

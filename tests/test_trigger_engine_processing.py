@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 
 from bot.pipeline import ProcessEventResult
+from bot.llm_client import LlmQuotaExhaustedError
 from bot.settings import AppPaths
 from bot.settings import load_settings
 from bot.trigger_engine import TriggerEngine
@@ -115,6 +116,16 @@ class _StubPipeline:
             "planner_prompt_preview": "",
             "replyer_prompt_preview": "",
         }
+
+
+class _QuotaExhaustedPipeline:
+    async def process_event(
+        self, forum_client: object, payload: dict[str, object], *, event_id: int | None = None
+    ) -> ProcessEventResult | None:
+        _ = forum_client
+        _ = payload
+        _ = event_id
+        raise LlmQuotaExhaustedError("quota exhausted")
 
 
 class _StubForumClient:
@@ -285,4 +296,34 @@ async def test_process_pending_events_processes_event_when_retry_succeeds(tmp_pa
     assert recent[0]["failure_count"] == 1
     assert recent[0]["last_error_text"] == f"boom:{event_id}"
     assert recent[0]["last_attempted_at"] is not None
+    await engine.forum_client.aclose()
+
+
+@pytest.mark.anyio
+async def test_process_pending_events_reraises_quota_exhausted_error(tmp_path: Path) -> None:
+    engine = _make_engine(tmp_path)
+    added = engine.database.record_trigger_event(
+        cast(
+            dict[str, object],
+            {"topic_id": 123, "reason": "notification", "source": "notification_worker", "notification_id": 1},
+        )
+    )
+    assert added.status == "created"
+
+    pending_before = engine.database.list_unprocessed_events()
+    event_id = int(pending_before[0]["id"])
+    cast(Any, engine).pipeline = _QuotaExhaustedPipeline()
+    cast(Any, engine).forum_client = _StubForumClient()
+
+    with pytest.raises(LlmQuotaExhaustedError):
+        _ = await engine._process_pending_events()
+
+    pending_after = engine.database.list_unprocessed_events()
+    assert len(pending_after) == 1
+    assert int(pending_after[0]["id"]) == event_id
+
+    recent = engine.database.list_recent_trigger_events(limit=1)
+    assert int(recent[0]["id"]) == event_id
+    assert recent[0]["processed_at"] is None
+    assert recent[0]["failure_count"] == 0
     await engine.forum_client.aclose()

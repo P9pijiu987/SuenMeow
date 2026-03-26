@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import re
 
 from bot.llm_client import LlmClient
+from bot.llm_client import LlmResponseFormatError
+from bot.llm_client import LlmRouteUnavailableError
 from bot.planner import PlannerDecision
 
 
@@ -63,28 +65,6 @@ class Replyer:
         sanitized = "\n".join(kept).strip()
         return sanitized[:4000]
 
-    def _fallback_generate(self, decision: PlannerDecision, context: str, persona_text: str) -> ReplyDraft:
-        if not decision.should_reply:
-            return ReplyDraft(
-                content="",
-                target_post_number=decision.target_post_number,
-                target_username=decision.target_username,
-                skipped=True,
-            )
-        prefix = self._sanitize_persona_prefix(persona_text)
-        opener = f"@{decision.target_username} " if decision.target_username else ""
-        reason = self._sanitize_reason(decision.reason) or "我看到了你的消息，会尽快给你一个明确回复"
-        body = f"{opener}{reason}."
-        if "memory-aware" in decision.style_notes:
-            body += " 我会结合你一贯的表达方式来回应。"
-        safe_content = self.sanitize_reply_text(f"{prefix}\n\n{body}".strip())
-        return ReplyDraft(
-            content=safe_content,
-            target_post_number=decision.target_post_number,
-            target_username=decision.target_username,
-            skipped=False,
-        )
-
     async def generate(
         self,
         decision: PlannerDecision,
@@ -96,9 +76,15 @@ class Replyer:
         user_prompt: str | None = None,
         route_name: str = "replyer",
     ) -> ReplyDraft:
-        fallback = self._fallback_generate(decision, context, persona_text)
-        if not decision.should_reply or llm_client is None:
-            return fallback
+        if not decision.should_reply:
+            return ReplyDraft(
+                content="",
+                target_post_number=decision.target_post_number,
+                target_username=decision.target_username,
+                skipped=True,
+            )
+        if llm_client is None:
+            raise LlmRouteUnavailableError("replyer route requires an available llm_client")
 
         if user_prompt is None:
             user_prompt = (
@@ -108,11 +94,11 @@ class Replyer:
                 "Write a single forum reply only."
             )
         response = await llm_client.chat(route_name, system_prompt, user_prompt, temperature=0.7)
-        if response is None or not response.content.strip():
-            return fallback
+        if not response.content.strip():
+            raise LlmResponseFormatError("replyer route returned empty content")
         safe_content = self.sanitize_reply_text(response.content)
         if not safe_content:
-            return fallback
+            raise LlmResponseFormatError("replyer route content became empty after sanitization")
         return ReplyDraft(
             content=safe_content,
             target_post_number=decision.target_post_number,

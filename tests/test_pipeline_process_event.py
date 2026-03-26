@@ -95,17 +95,17 @@ class FakeLlmClient(LlmClient):
 
     @override
     def is_route_available(self, route_name: str) -> bool:
-        return route_name == "memory"
+        return route_name in {"replyer", "memory"}
 
     @override
-    async def chat(self, route_name: str, system_prompt: str, user_prompt: str, temperature: float = 0.7) -> LlmResponse | None:
+    async def chat(self, route_name: str, system_prompt: str, user_prompt: str, temperature: float = 0.7) -> LlmResponse:
         _ = system_prompt
         _ = user_prompt
         _ = temperature
         self.calls.append(route_name)
-        if route_name != "memory":
-            return None
-        return LlmResponse(content=json.dumps(self.memory_payload, ensure_ascii=False), model="fake-memory", provider="fake")
+        if route_name == "memory":
+            return LlmResponse(content=json.dumps(self.memory_payload, ensure_ascii=False), model="fake-memory", provider="fake")
+        return LlmResponse(content="@bob 收到，我会继续跟进。", model="fake-replyer", provider="fake")
 
     @staticmethod
     @override
@@ -150,13 +150,14 @@ def _make_pipeline(
 
     database = Database(tmp_path / "test.sqlite3")
     database.initialize()
+    resolved_llm_client = llm_client if llm_client is not None else FakeLlmClient()
     return Pipeline(
         context_builder=ContextBuilder(planner_max_posts=20, replyer_max_posts=10),
         planner=FakePlanner(decision),
         replyer=Replyer(),
         persona_loader=PersonaLoader(persona_dir),
         prompt_loader=PromptLoader(prompt_dir),
-        llm_client=llm_client,
+        llm_client=resolved_llm_client,
         ban_service=BanService("SuenMeow"),
         database=database,
         memory_service=MemoryService(database),

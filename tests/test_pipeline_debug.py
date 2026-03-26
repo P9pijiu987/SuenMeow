@@ -10,14 +10,47 @@ from bot.pipeline import Pipeline
 from bot.planner import Planner
 from bot.prompt_loader import PromptLoader
 from bot.replyer import Replyer
+from bot.llm_client import LlmResponse
 from bot.ban_service import BanService
 from bot.settings import CredentialsConfig, ForumConfig
 from bot.llm_client import LlmClient
-from bot.settings import ModelRoute, ProviderConfig
 from bot.settings import PromptModuleEntry, PromptModulesConfig, PromptRouteConfig
-from bot.persona_loader import PersonaLoader
-from bot.prompt_loader import PromptLoader
 from db.repositories import Database
+
+
+class FakeDebugLlmClient(LlmClient):
+    def __init__(self) -> None:
+        super().__init__({}, {})
+
+    async def chat(self, route_name: str, system_prompt: str, user_prompt: str, temperature: float = 0.7) -> LlmResponse:
+        _ = system_prompt
+        _ = user_prompt
+        _ = temperature
+        if route_name == "planner":
+            return LlmResponse(
+                content='{"should_reply": true, "priority": "normal", "target_username": "bob", "target_post_number": 2, "reason": "reply to bob", "style_notes": "concise", "memory_action": "none"}',
+                model="fake-planner",
+                provider="fake",
+            )
+        if route_name == "memory":
+            return LlmResponse(content='{"user_updates": [], "self_update": null}', model="fake-memory", provider="fake")
+        return LlmResponse(content="@bob 收到，我会跟进。", model="fake-replyer", provider="fake")
+
+    @staticmethod
+    def parse_json_object(content: str):
+        import json
+
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict):
+            return None
+        return parsed
+
+    def describe_route(self, route_name: str) -> dict[str, str]:
+        return {"route": route_name, "provider": "fake", "model": f"fake-{route_name}"}
+
+    def is_route_available(self, route_name: str) -> bool:
+        _ = route_name
+        return True
 
 
 class FakeForumClient(ForumClient):
@@ -67,10 +100,7 @@ async def test_debug_topic_returns_full_prompt_payload(tmp_path: Path) -> None:
         replyer=Replyer(),
         persona_loader=PersonaLoader(persona_dir),
         prompt_loader=PromptLoader(prompt_dir),
-        llm_client=LlmClient(
-            providers={"default": ProviderConfig(base_url="https://example.com", api_key="replace_me", timeout_seconds=10)},
-            models={"planner": ModelRoute(provider="default", model="x"), "replyer": ModelRoute(provider="default", model="y")},
-        ),
+        llm_client=FakeDebugLlmClient(),
         ban_service=BanService("SuenMeow"),
         database=database,
         memory_service=MemoryService(database),
@@ -88,8 +118,8 @@ async def test_debug_topic_returns_full_prompt_payload(tmp_path: Path) -> None:
     assert "memory" in result["debug_prompts"]
     assert planner_route is not None
     assert replyer_route is not None
-    assert planner_route["model"] == "x"
-    assert replyer_route["model"] == "y"
+    assert planner_route["model"] == "fake-planner"
+    assert replyer_route["model"] == "fake-replyer"
     assert "core persona" in result["debug_prompts"]["planner"]["system"]
     assert "# Style" not in result["debug_prompts"]["planner"]["system"]
     assert "Core persona:" not in result["debug_prompts"]["planner"]["user"]
@@ -121,10 +151,7 @@ async def test_debug_topic_uses_configured_prompt_module_order_and_enabled_flags
         replyer=Replyer(),
         persona_loader=PersonaLoader(prompt_dir),
         prompt_loader=PromptLoader(prompt_dir),
-        llm_client=LlmClient(
-            providers={"default": ProviderConfig(base_url="https://example.com", api_key="replace_me", timeout_seconds=10)},
-            models={"planner": ModelRoute(provider="default", model="x"), "replyer": ModelRoute(provider="default", model="y")},
-        ),
+        llm_client=FakeDebugLlmClient(),
         ban_service=BanService("SuenMeow"),
         database=database,
         memory_service=MemoryService(database),
@@ -184,10 +211,7 @@ async def test_debug_topic_allows_persona_modules_in_replyer_chain_without_dupli
         replyer=Replyer(),
         persona_loader=PersonaLoader(prompt_dir),
         prompt_loader=PromptLoader(prompt_dir),
-        llm_client=LlmClient(
-            providers={"default": ProviderConfig(base_url="https://example.com", api_key="replace_me", timeout_seconds=10)},
-            models={"planner": ModelRoute(provider="default", model="x"), "replyer": ModelRoute(provider="default", model="y")},
-        ),
+        llm_client=FakeDebugLlmClient(),
         ban_service=BanService("SuenMeow"),
         database=database,
         memory_service=MemoryService(database),
@@ -229,10 +253,7 @@ async def test_debug_topic_raises_when_enabled_prompt_module_is_missing(tmp_path
         replyer=Replyer(),
         persona_loader=PersonaLoader(prompt_dir),
         prompt_loader=PromptLoader(prompt_dir),
-        llm_client=LlmClient(
-            providers={"default": ProviderConfig(base_url="https://example.com", api_key="replace_me", timeout_seconds=10)},
-            models={"planner": ModelRoute(provider="default", model="x"), "replyer": ModelRoute(provider="default", model="y")},
-        ),
+        llm_client=FakeDebugLlmClient(),
         ban_service=BanService("SuenMeow"),
         database=database,
         memory_service=MemoryService(database),

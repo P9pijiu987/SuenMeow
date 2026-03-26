@@ -13,6 +13,7 @@ from bot.budget_service import BudgetService
 from bot.context_builder import ContextBuilder
 from bot.forum_client import ForumClient
 from bot.llm_client import LlmClient
+from bot.llm_client import LlmQuotaExhaustedError
 from bot.memory_service import MemoryService
 from bot.notification_worker import NotificationWorker
 from bot.persona_loader import PersonaLoader
@@ -183,6 +184,12 @@ class TriggerEngine:
                 continue
             try:
                 result = await self.pipeline.process_event(self.forum_client, event["payload"], event_id=int(event["id"]))
+            except LlmQuotaExhaustedError:
+                logger.critical(
+                    "LLM quota exhausted while processing trigger event; event_id=%s",
+                    event["id"],
+                )
+                raise
             except Exception as exc:
                 failure_count = self.database.record_event_failure(int(event["id"]), str(exc))
                 logger.exception(
