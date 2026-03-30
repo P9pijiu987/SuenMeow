@@ -199,6 +199,7 @@ async def test_trigger_engine_reload_updates_runtime_settings_without_recreating
         assert engine.pipeline.require_approval_before_send is False
         assert engine.pipeline.enabled_personas == ["core", "catgirl"]
         assert [module.name for module in engine.pipeline.prompt_modules.planner.modules] == [
+            "core.md",
             "custom_rules.md",
             "planner.md",
         ]

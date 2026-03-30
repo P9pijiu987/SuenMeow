@@ -12,6 +12,7 @@ from bot.settings import editable_config_filenames
 from bot.settings import ensure_prompt_storage
 from bot.settings import available_module_files
 from bot.settings import enabled_prompt_module_names
+from bot.settings import protected_prompt_modules_for_route
 from bot.settings import runtime_mode_name
 from bot.settings import Settings
 from bot.settings import PromptModuleEntry
@@ -92,6 +93,23 @@ def _build_route_config(items: list[PromptModuleItemPayload], available_files: s
     return PromptRouteConfig(modules=modules)
 
 
+def _enforce_protected_modules(route_name: str, route: PromptRouteConfig, available_files: set[str]) -> PromptRouteConfig:
+    protected_order = protected_prompt_modules_for_route(route_name, available_files=available_files)
+    if not protected_order:
+        return route
+    protected_set = set(protected_order)
+    existing_names = {module.name for module in route.modules}
+    missing = [name for name in protected_order if name not in existing_names]
+    if missing:
+        missing_display = ", ".join(missing)
+        raise HTTPException(status_code=400, detail=f"{route_name} 链路不可移出受保护模块: {missing_display}")
+    current_order = [module.name for module in route.modules if module.name in protected_set]
+    if current_order != list(protected_order):
+        protected_display = ", ".join(protected_order)
+        raise HTTPException(status_code=400, detail=f"{route_name} 链路受保护模块顺序必须为: {protected_display}")
+    return route
+
+
 def _unique_names(names: list[str]) -> list[str]:
     seen_names: set[str] = set()
     ordered_names: list[str] = []
@@ -162,8 +180,7 @@ def _compose_final_system_prompt(
 ) -> str:
     module_names = _route_enabled_module_names(prompt_modules, route_name)
     route_prompt = _compose_route_modules(route_name, module_names, prompt_loader, persona_loader)
-    route_personas = _configured_personas(module_names, persona_loader)
-    include_core = "core" not in route_personas
+    include_core = "core.md" not in module_names
     return _unique_text([persona_loader.compose(["core"]) if include_core else "", route_prompt])
 
 
@@ -281,9 +298,21 @@ def get_config(request: Request) -> dict[str, object]:
 def update_prompt_modules(payload: PromptModulesPayload, request: Request) -> dict[str, object]:
     available_files = set(_available_module_files(request))
     prompt_modules = PromptModulesConfig(
-        planner=_build_route_config(payload.planner.modules, available_files),
-        replyer=_build_route_config(payload.replyer.modules, available_files),
-        memory=_build_route_config(payload.memory.modules, available_files),
+        planner=_enforce_protected_modules(
+            "planner",
+            _build_route_config(payload.planner.modules, available_files),
+            available_files,
+        ),
+        replyer=_enforce_protected_modules(
+            "replyer",
+            _build_route_config(payload.replyer.modules, available_files),
+            available_files,
+        ),
+        memory=_enforce_protected_modules(
+            "memory",
+            _build_route_config(payload.memory.modules, available_files),
+            available_files,
+        ),
     )
     try:
         validate_prompt_modules_config(request.app.state.paths, prompt_modules)

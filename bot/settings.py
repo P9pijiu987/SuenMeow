@@ -16,9 +16,14 @@ import tomllib
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_PLANNER_PROMPT_MODULES = ("planner.md", "safety_rules.md")
-DEFAULT_REPLYER_PROMPT_MODULES = ("replyer.md", "style_rules.md", "safety_rules.md")
-DEFAULT_MEMORY_PROMPT_MODULES = ("memory_user_update.md", "memory_self_update.md")
+DEFAULT_PLANNER_PROMPT_MODULES = ("core.md", "planner.md", "safety_rules.md")
+DEFAULT_REPLYER_PROMPT_MODULES = ("core.md", "replyer.md", "style_rules.md", "safety_rules.md")
+DEFAULT_MEMORY_PROMPT_MODULES = ("core.md", "memory_user_update.md", "memory_self_update.md")
+PROTECTED_PROMPT_MODULES_BY_ROUTE: dict[str, tuple[str, ...]] = {
+    "planner": ("core.md",),
+    "replyer": ("core.md",),
+    "memory": ("core.md",),
+}
 PROMPT_MODULES_CONFIG_FILENAME = "prompt_modules.toml"
 PROMPT_BACKUP_DIRNAME = "prompts_backup"
 LEGACY_PROMPT_SOURCE_ENV = {
@@ -239,6 +244,41 @@ def _default_prompt_route_config(names: tuple[str, ...]) -> PromptRouteConfig:
     return PromptRouteConfig(modules=[PromptModuleEntry(name=name, enabled=True) for name in names])
 
 
+def _protected_prompt_module_sequence(route_name: str) -> tuple[str, ...]:
+    try:
+        return PROTECTED_PROMPT_MODULES_BY_ROUTE[route_name]
+    except KeyError as exc:
+        raise ValueError(f"Unknown prompt route: {route_name}") from exc
+
+
+def protected_prompt_modules_for_route(route_name: str, *, available_files: set[str] | None = None) -> set[str]:
+    protected = set(_protected_prompt_module_sequence(route_name))
+    if available_files is None:
+        return protected
+    return {name for name in protected if name in available_files}
+
+
+def _inject_missing_protected_modules(
+    route_name: str,
+    modules: list[PromptModuleEntry],
+    *,
+    available_files: set[str],
+) -> list[PromptModuleEntry]:
+    protected_sequence = _protected_prompt_module_sequence(route_name)
+    protected_names = protected_prompt_modules_for_route(route_name, available_files=available_files)
+    existing_names = {module.name for module in modules}
+    missing = [name for name in protected_sequence if name in protected_names and name not in existing_names]
+    if not missing:
+        return modules
+    logger.warning(
+        "Prompt route '%s' is missing protected modules: %s; protected modules will be auto-inserted",
+        route_name,
+        ", ".join(missing),
+    )
+    injected = [PromptModuleEntry(name=name, enabled=True) for name in missing]
+    return [*injected, *modules]
+
+
 def _safe_legacy_dir_tag(path: Path) -> str:
     normalized = "".join(char.lower() if char.isalnum() else "_" for char in path.name)
     cleaned = normalized.strip("_")
@@ -323,6 +363,7 @@ def default_prompt_modules_config() -> PromptModulesConfig:
 
 def validate_prompt_route_config(route_name: str, route: PromptRouteConfig, *, available_files: set[str]) -> None:
     _validate_prompt_route_structure(route_name, route)
+    _validate_prompt_route_protection(route_name, route, available_files=available_files)
     missing_modules = [module.name for module in route.modules if module.name not in available_files]
     if missing_modules:
         missing_list = ", ".join(sorted(missing_modules))
@@ -334,6 +375,16 @@ def _validate_prompt_route_structure(route_name: str, route: PromptRouteConfig) 
         raise ValueError(f"Prompt route '{route_name}' must contain at least one module")
     if not any(module.enabled for module in route.modules):
         raise ValueError(f"Prompt route '{route_name}' must enable at least one module")
+
+
+def _validate_prompt_route_protection(route_name: str, route: PromptRouteConfig, *, available_files: set[str]) -> None:
+    protected_names = protected_prompt_modules_for_route(route_name, available_files=available_files)
+    if not protected_names:
+        return
+    configured_names = {module.name for module in route.modules}
+    missing = sorted(protected_names - configured_names)
+    if missing:
+        raise ValueError(f"Prompt route '{route_name}' must include protected modules: {', '.join(missing)}")
 
 
 def _sanitize_loaded_prompt_route(
@@ -353,7 +404,9 @@ def _sanitize_loaded_prompt_route(
         )
     filtered_modules = [module for module in route.modules if module.name in available_files]
     if filtered_modules:
-        sanitized_route = PromptRouteConfig(modules=filtered_modules)
+        sanitized_route = PromptRouteConfig(
+            modules=_inject_missing_protected_modules(route_name, filtered_modules, available_files=available_files)
+        )
         _validate_prompt_route_structure(route_name, sanitized_route)
         return sanitized_route
 
@@ -368,7 +421,11 @@ def _sanitize_loaded_prompt_route(
         route_name,
         fallback_list,
     )
-    return _default_prompt_route_config(tuple(fallback_names))
+    fallback_route = _default_prompt_route_config(tuple(fallback_names))
+    fallback_route = PromptRouteConfig(
+        modules=_inject_missing_protected_modules(route_name, fallback_route.modules, available_files=available_files)
+    )
+    return fallback_route
 
 
 def validate_prompt_modules_config(paths: AppPaths, prompt_modules: PromptModulesConfig) -> None:
@@ -424,14 +481,25 @@ def enabled_prompt_module_names(route: PromptRouteConfig) -> list[str]:
 
 
 def prompt_modules_to_dict(prompt_modules: PromptModulesConfig) -> dict[str, list[dict[str, object]]]:
+    def serialize(route_name: str, route: PromptRouteConfig) -> list[dict[str, object]]:
+        protected_names = protected_prompt_modules_for_route(route_name)
+        serialized: list[dict[str, object]] = []
+        for module in route.modules:
+            is_protected = module.name in protected_names
+            serialized.append(
+                {
+                    "name": module.name,
+                    "enabled": module.enabled,
+                    "removable": not is_protected,
+                    "protected": is_protected,
+                }
+            )
+        return serialized
+
     return {
-        "planner": [
-            {"name": module.name, "enabled": module.enabled} for module in prompt_modules.planner.modules
-        ],
-        "replyer": [
-            {"name": module.name, "enabled": module.enabled} for module in prompt_modules.replyer.modules
-        ],
-        "memory": [{"name": module.name, "enabled": module.enabled} for module in prompt_modules.memory.modules],
+        "planner": serialize("planner", prompt_modules.planner),
+        "replyer": serialize("replyer", prompt_modules.replyer),
+        "memory": serialize("memory", prompt_modules.memory),
     }
 
 

@@ -342,7 +342,7 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
     <div class="col-span-4 compact-stack">
       <section class="card col-span-12" style="height: 100%;">
         <div class="card-header"><h2>🎛️ 模块编排 (Prompt Modules)</h2></div>
-        <p class="section-note">选择并排序即可，无需大段文本编辑。</p>
+        <p class="section-note">选择并排序即可，支持移出；受保护模块不可移出。</p>
         <div class="module-route-grid">
           <div>
             <label for="planner-add-module">Planner 模块链</label>
@@ -691,6 +691,7 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
             <div class="module-actions">
               <button class="secondary" type="button" onclick="movePromptModule('${{route}}', ${{index}}, -1)" ${{index === 0 ? 'disabled' : ''}}>↑</button>
               <button class="secondary" type="button" onclick="movePromptModule('${{route}}', ${{index}}, 1)" ${{index === modules.length - 1 ? 'disabled' : ''}}>↓</button>
+              <button class="secondary" type="button" onclick="removePromptModule('${{route}}', ${{index}})" ${{module.removable === false ? 'disabled title=\"受保护模块不可移出\"' : ''}}>移出</button>
             </div>
           </div>
         `).join('');
@@ -727,7 +728,15 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
       const select = document.getElementById(`${{route}}-add-module`);
       const name = select.value;
       if (!name) return;
-      promptModuleState[route].push({{ name, enabled: true }});
+      promptModuleState[route].push({{ name, enabled: true, removable: true, protected: false }});
+      renderPromptModuleRoute(route);
+    }}
+
+    function removePromptModule(route, index) {{
+      const modules = promptModuleState[route];
+      const target = modules[index];
+      if (!target || target.removable === false) return;
+      modules.splice(index, 1);
       renderPromptModuleRoute(route);
     }}
 
@@ -735,9 +744,24 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
       availableModuleFiles = data.available_module_files || [];
       const promptModules = data.prompt_modules || {{ planner: [], replyer: [], memory: [] }};
       promptModuleState = {{
-        planner: (promptModules.planner || []).map(item => ({{ name: item.name, enabled: Boolean(item.enabled) }})),
-        replyer: (promptModules.replyer || []).map(item => ({{ name: item.name, enabled: Boolean(item.enabled) }})),
-        memory: (promptModules.memory || []).map(item => ({{ name: item.name, enabled: Boolean(item.enabled) }})),
+        planner: (promptModules.planner || []).map(item => ({{
+          name: item.name,
+          enabled: Boolean(item.enabled),
+          removable: item.removable !== false,
+          protected: Boolean(item.protected),
+        }})),
+        replyer: (promptModules.replyer || []).map(item => ({{
+          name: item.name,
+          enabled: Boolean(item.enabled),
+          removable: item.removable !== false,
+          protected: Boolean(item.protected),
+        }})),
+        memory: (promptModules.memory || []).map(item => ({{
+          name: item.name,
+          enabled: Boolean(item.enabled),
+          removable: item.removable !== false,
+          protected: Boolean(item.protected),
+        }})),
       }};
       renderPromptModuleRoute('planner');
       renderPromptModuleRoute('replyer');

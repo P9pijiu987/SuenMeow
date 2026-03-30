@@ -79,13 +79,15 @@ def test_settings_load_personas(tmp_path: Path) -> None:
     assert settings.runtime.muted_usernames == ["alice", "bob"]
     assert settings.webui.public_host == "127.0.0.1"
     assert settings.webui.public_port == 8001
-    assert [module.name for module in settings.prompt_modules.planner.modules] == ["planner.md", "safety_rules.md"]
+    assert [module.name for module in settings.prompt_modules.planner.modules] == ["core.md", "planner.md", "safety_rules.md"]
     assert [module.name for module in settings.prompt_modules.replyer.modules] == [
+        "core.md",
         "replyer.md",
         "style_rules.md",
         "safety_rules.md",
     ]
     assert [module.name for module in settings.prompt_modules.memory.modules] == [
+        "core.md",
         "memory_user_update.md",
         "memory_self_update.md",
     ]
@@ -104,10 +106,12 @@ def test_settings_load_custom_prompt_modules(tmp_path: Path) -> None:
     settings = load_settings(AppPaths.from_root(root))
 
     assert [(module.name, module.enabled) for module in settings.prompt_modules.planner.modules] == [
+        ("core.md", True),
         ("planner.md", True),
         ("safety_rules.md", False),
     ]
     assert [(module.name, module.enabled) for module in settings.prompt_modules.replyer.modules] == [
+        ("core.md", True),
         ("safety_rules.md", True),
         ("replyer.md", True),
     ]
@@ -129,16 +133,35 @@ def test_settings_missing_prompt_module_file_is_ignored_with_fallback(tmp_path: 
 
     settings = load_settings(AppPaths.from_root(root))
 
-    assert [module.name for module in settings.prompt_modules.planner.modules] == ["planner.md"]
+    assert [module.name for module in settings.prompt_modules.planner.modules] == ["core.md", "planner.md"]
     assert [module.name for module in settings.prompt_modules.replyer.modules] == [
+        "core.md",
         "replyer.md",
         "style_rules.md",
         "safety_rules.md",
     ]
     assert [module.name for module in settings.prompt_modules.memory.modules] == [
+        "core.md",
         "memory_user_update.md",
         "memory_self_update.md",
     ]
+
+
+def test_settings_auto_injects_protected_core_module(tmp_path: Path) -> None:
+    root = tmp_path
+    config_dir = _write_base_config(root)
+    prompt_modules_toml = (
+        "[planner]\n[[planner.modules]]\nname='planner.md'\nenabled=true\n\n"
+        "[replyer]\n[[replyer.modules]]\nname='replyer.md'\nenabled=true\n\n"
+        "[memory]\n[[memory.modules]]\nname='memory_user_update.md'\nenabled=true\n"
+    )
+    _ = (config_dir / "prompt_modules.toml").write_text(prompt_modules_toml, encoding="utf-8")
+
+    settings = load_settings(AppPaths.from_root(root))
+
+    assert [module.name for module in settings.prompt_modules.planner.modules] == ["core.md", "planner.md"]
+    assert [module.name for module in settings.prompt_modules.replyer.modules] == ["core.md", "replyer.md"]
+    assert [module.name for module in settings.prompt_modules.memory.modules] == ["core.md", "memory_user_update.md"]
 
 
 def test_settings_still_rejects_missing_modules_on_explicit_validation(tmp_path: Path) -> None:
@@ -155,7 +178,12 @@ def test_settings_still_rejects_missing_modules_on_explicit_validation(tmp_path:
     from bot.settings import PromptRouteConfig
     from bot.settings import validate_prompt_route_config
 
-    route = PromptRouteConfig(modules=[PromptModuleEntry(name="missing_memory.md", enabled=True)])
+    route = PromptRouteConfig(
+        modules=[
+            PromptModuleEntry(name="core.md", enabled=True),
+            PromptModuleEntry(name="missing_memory.md", enabled=True),
+        ]
+    )
     with pytest.raises(ValueError, match="references missing modules"):
         validate_prompt_route_config("memory", route, available_files=available_module_files(AppPaths.from_root(root)))
 
@@ -164,7 +192,7 @@ def test_settings_reject_prompt_route_without_enabled_modules(tmp_path: Path) ->
     root = tmp_path
     config_dir = _write_base_config(root)
     prompt_modules_toml = (
-        "[planner]\n[[planner.modules]]\nname='planner.md'\nenabled=false\n\n"
+        "[planner]\n[[planner.modules]]\nname='core.md'\nenabled=false\n[[planner.modules]]\nname='planner.md'\nenabled=false\n\n"
         "[replyer]\n[[replyer.modules]]\nname='replyer.md'\nenabled=true\n\n"
         "[memory]\n[[memory.modules]]\nname='memory_user_update.md'\nenabled=true\n"
     )

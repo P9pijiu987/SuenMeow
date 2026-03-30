@@ -248,17 +248,20 @@ def test_config_prompt_modules_support_read_and_update(tmp_path: Path) -> None:
             "style_rules.md",
         ]
         assert data["prompt_modules"]["planner"] == [
-            {"name": "planner.md", "enabled": True},
-            {"name": "safety_rules.md", "enabled": True},
+            {"name": "core.md", "enabled": True, "removable": False, "protected": True},
+            {"name": "planner.md", "enabled": True, "removable": True, "protected": False},
+            {"name": "safety_rules.md", "enabled": True, "removable": True, "protected": False},
         ]
         assert data["prompt_modules"]["replyer"] == [
-            {"name": "replyer.md", "enabled": True},
-            {"name": "style_rules.md", "enabled": True},
-            {"name": "safety_rules.md", "enabled": True},
+            {"name": "core.md", "enabled": True, "removable": False, "protected": True},
+            {"name": "replyer.md", "enabled": True, "removable": True, "protected": False},
+            {"name": "style_rules.md", "enabled": True, "removable": True, "protected": False},
+            {"name": "safety_rules.md", "enabled": True, "removable": True, "protected": False},
         ]
         assert data["prompt_modules"]["memory"] == [
-            {"name": "memory_user_update.md", "enabled": True},
-            {"name": "memory_self_update.md", "enabled": True},
+            {"name": "core.md", "enabled": True, "removable": False, "protected": True},
+            {"name": "memory_user_update.md", "enabled": True, "removable": True, "protected": False},
+            {"name": "memory_self_update.md", "enabled": True, "removable": True, "protected": False},
         ]
         assert "final_system_prompts" in data
         assert isinstance(data["final_system_prompts"], dict)
@@ -301,12 +304,14 @@ def test_config_prompt_modules_support_read_and_update(tmp_path: Path) -> None:
             json={
                 "planner": {
                     "modules": [
+                        {"name": "core.md", "enabled": True},
                         {"name": "custom_rules.md", "enabled": True},
                         {"name": "planner.md", "enabled": True},
                     ]
                 },
                 "replyer": {
                     "modules": [
+                        {"name": "core.md", "enabled": True},
                         {"name": "catgirl.md", "enabled": True},
                         {"name": "replyer.md", "enabled": True},
                         {"name": "style_rules.md", "enabled": False},
@@ -316,6 +321,7 @@ def test_config_prompt_modules_support_read_and_update(tmp_path: Path) -> None:
                 "memory": {
                     "modules": [
                         {"name": "core.md", "enabled": True},
+                        {"name": "memory_user_update.md", "enabled": True},
                         {"name": "memory_self_update.md", "enabled": True},
                     ]
                 },
@@ -324,23 +330,29 @@ def test_config_prompt_modules_support_read_and_update(tmp_path: Path) -> None:
         assert updated.status_code == 200
         updated_data = updated.json()
         assert updated_data["prompt_modules"]["planner"] == [
-            {"name": "custom_rules.md", "enabled": True},
-            {"name": "planner.md", "enabled": True},
+            {"name": "core.md", "enabled": True, "removable": False, "protected": True},
+            {"name": "custom_rules.md", "enabled": True, "removable": True, "protected": False},
+            {"name": "planner.md", "enabled": True, "removable": True, "protected": False},
         ]
         assert updated_data["prompt_modules"]["replyer"] == [
-            {"name": "catgirl.md", "enabled": True},
-            {"name": "replyer.md", "enabled": True},
-            {"name": "style_rules.md", "enabled": False},
-            {"name": "safety_rules.md", "enabled": True},
+            {"name": "core.md", "enabled": True, "removable": False, "protected": True},
+            {"name": "catgirl.md", "enabled": True, "removable": True, "protected": False},
+            {"name": "replyer.md", "enabled": True, "removable": True, "protected": False},
+            {"name": "style_rules.md", "enabled": False, "removable": True, "protected": False},
+            {"name": "safety_rules.md", "enabled": True, "removable": True, "protected": False},
         ]
         assert updated_data["prompt_modules"]["memory"] == [
-            {"name": "core.md", "enabled": True},
-            {"name": "memory_self_update.md", "enabled": True},
+            {"name": "core.md", "enabled": True, "removable": False, "protected": True},
+            {"name": "memory_user_update.md", "enabled": True, "removable": True, "protected": False},
+            {"name": "memory_self_update.md", "enabled": True, "removable": True, "protected": False},
         ]
 
     prompt_modules_file = tmp_path / "config" / "prompt_modules.toml"
     assert prompt_modules_file.read_text(encoding="utf-8") == (
         "[planner]\n"
+        "[[planner.modules]]\n"
+        "name = \"core.md\"\n"
+        "enabled = true\n"
         "[[planner.modules]]\n"
         "name = \"custom_rules.md\"\n"
         "enabled = true\n"
@@ -348,6 +360,9 @@ def test_config_prompt_modules_support_read_and_update(tmp_path: Path) -> None:
         "name = \"planner.md\"\n"
         "enabled = true\n\n"
         "[replyer]\n"
+        "[[replyer.modules]]\n"
+        "name = \"core.md\"\n"
+        "enabled = true\n"
         "[[replyer.modules]]\n"
         "name = \"catgirl.md\"\n"
         "enabled = true\n"
@@ -365,9 +380,79 @@ def test_config_prompt_modules_support_read_and_update(tmp_path: Path) -> None:
         "name = \"core.md\"\n"
         "enabled = true\n"
         "[[memory.modules]]\n"
+        "name = \"memory_user_update.md\"\n"
+        "enabled = true\n"
+        "[[memory.modules]]\n"
         "name = \"memory_self_update.md\"\n"
         "enabled = true\n"
     )
+
+
+def test_config_prompt_modules_rejects_removing_protected_core(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/config/prompt-modules",
+            json={
+                "planner": {"modules": [{"name": "planner.md", "enabled": True}]},
+                "replyer": {
+                    "modules": [
+                        {"name": "core.md", "enabled": True},
+                        {"name": "replyer.md", "enabled": True},
+                    ]
+                },
+                "memory": {
+                    "modules": [
+                        {"name": "core.md", "enabled": True},
+                        {"name": "memory_user_update.md", "enabled": True},
+                    ]
+                },
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "planner 链路不可移出受保护模块: core.md"
+
+
+def test_config_prompt_modules_accepts_protected_module_position_moves(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path)
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/config/prompt-modules",
+            json={
+                "planner": {
+                    "modules": [
+                        {"name": "custom_rules.md", "enabled": True},
+                        {"name": "core.md", "enabled": True},
+                        {"name": "planner.md", "enabled": True},
+                    ]
+                },
+                "replyer": {
+                    "modules": [
+                        {"name": "catgirl.md", "enabled": True},
+                        {"name": "core.md", "enabled": True},
+                        {"name": "replyer.md", "enabled": True},
+                    ]
+                },
+                "memory": {
+                    "modules": [
+                        {"name": "memory_user_update.md", "enabled": True},
+                        {"name": "core.md", "enabled": True},
+                        {"name": "memory_self_update.md", "enabled": True},
+                    ]
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["prompt_modules"]["planner"][1]["name"] == "core.md"
+    assert payload["prompt_modules"]["replyer"][1]["name"] == "core.md"
+    assert payload["prompt_modules"]["memory"][1]["name"] == "core.md"
 
 
 def test_config_editable_route_reads_and_updates_non_sensitive_config(tmp_path: Path) -> None:
@@ -573,6 +658,12 @@ def test_public_editor_routes_use_unified_prompts_storage(tmp_path: Path) -> Non
     cfg = config_res.json()
     assert "planner.md" in cfg["prompts"]
     assert "core.md" in cfg["prompts"]
+    assert cfg["prompt_modules"]["planner"][0] == {
+        "name": "core.md",
+        "enabled": True,
+        "removable": False,
+        "protected": True,
+    }
 
     builtin_read = client.get("/public/prompts/planner.md")
     assert builtin_read.status_code == 200
@@ -611,6 +702,67 @@ def test_public_editor_memory_is_readonly(tmp_path: Path) -> None:
     data = client.get("/public/memory")
     assert data.status_code == 200
     assert "self_memory" in data.json()
+
+
+def test_public_editor_home_uses_admin_like_layout_with_limited_panels(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path, app_mode="public")
+    client = TestClient(app)
+
+    response = client.get("/public")
+    assert response.status_code == 200
+    text = response.text
+    assert "<title>SuenMeow Public Editor</title>" in text
+    assert "SuenMeow Public Editor" in text
+    assert "Prompt Editor" in text
+    assert "Prompt Modules" in text
+    assert "User Memories" in text
+    assert "Self Memory" in text
+    assert "Latest Logs" in text
+    assert "loadPromptModules" in text
+    assert "removePromptModule" in text
+    assert "受保护模块不可移出" in text
+    assert "loadMemoryView" in text
+    assert "loadLogs" in text
+    assert "loadAllMemories" not in text
+    assert "saveSelfMemory" not in text
+    assert "saveUserMemory" not in text
+    assert "待审核回复" not in text
+    assert "流水线追踪" not in text
+    assert "非敏感配置编辑" not in text
+
+
+def test_public_latest_log_endpoint_returns_latest_file_content(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path, app_mode="public")
+    log_dir = tmp_path / "logs"
+    _ = (log_dir / "older.log").write_text("old\n", encoding="utf-8")
+    latest = log_dir / "latest.log"
+    _ = latest.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+
+    client = TestClient(app)
+    response = client.get("/public/logs/latest?lines=2")
+
+    assert response.status_code == 200
+    assert response.json() == {"file": "latest.log", "lines": ["beta", "gamma"]}
+
+
+def test_public_latest_log_endpoint_clamps_requested_line_count(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path, app_mode="public")
+    log_dir = tmp_path / "logs"
+    latest = log_dir / "latest.log"
+    _ = latest.write_text("l1\nl2\nl3\n", encoding="utf-8")
+
+    client = TestClient(app)
+
+    response_zero = client.get("/public/logs/latest?lines=0")
+    assert response_zero.status_code == 200
+    assert response_zero.json() == {"file": "latest.log", "lines": ["l3"]}
+
+    response_huge = client.get("/public/logs/latest?lines=99999")
+    assert response_huge.status_code == 200
+    assert response_huge.json() == {"file": "latest.log", "lines": ["l1", "l2", "l3"]}
 
 
 def test_public_app_root_redirects_to_public_editor(tmp_path: Path) -> None:
