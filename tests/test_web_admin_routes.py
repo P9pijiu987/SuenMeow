@@ -613,6 +613,19 @@ def test_public_editor_memory_is_readonly(tmp_path: Path) -> None:
     assert "self_memory" in data.json()
 
 
+def test_public_app_root_redirects_to_public_editor(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path, app_mode="public")
+    client = TestClient(app)
+
+    redirected = client.get("/", follow_redirects=False)
+    assert redirected.status_code == 302
+    assert redirected.headers["location"] == "/public"
+
+    not_found = client.get("/prompts", follow_redirects=False)
+    assert not_found.status_code == 404
+
+
 def test_admin_login_required_when_enable_auth_true(tmp_path: Path) -> None:
     _write_config(tmp_path)
     auth_file = tmp_path / "config" / "webui_admin_auth.toml"

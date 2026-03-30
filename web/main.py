@@ -53,6 +53,8 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
     @app.middleware("http")
     async def admin_auth_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
         if app_mode == "public":
+            if request.url.path == "/":
+                return RedirectResponse(url="/public", status_code=302)
             if request.url.path.startswith("/public") or request.url.path == "/health":
                 return await call_next(request)
             return JSONResponse(status_code=404, content={"detail": "Not Found"})

@@ -21,6 +21,7 @@ from bot.planner import PlannerInput
 from bot.prompt_loader import PromptLoader
 from bot.replyer import ReplyDraft
 from bot.replyer import Replyer
+from bot.settings import ModelRoute
 from bot.settings import PromptModulesConfig
 from bot.settings import default_prompt_modules_config
 from bot.settings import enabled_prompt_module_names
@@ -105,6 +106,7 @@ class Pipeline:
     _MEMORY_UPDATE_CONFIDENCE_THRESHOLD = 0.2
     _SELF_MEMORY_UPDATE_CONFIDENCE_THRESHOLD = 0.6
     _MEMORY_COMMAND_PATTERN = re.compile(r"^\s*/memory\+(?P<content>.+)$", re.IGNORECASE | re.DOTALL)
+    _SUMMARY_COMMAND_PATTERN = re.compile(r"^\s*/summary(?:\s+(?P<content>.+))?\s*$", re.IGNORECASE | re.DOTALL)
 
     def __init__(
         self,
@@ -369,6 +371,205 @@ class Pipeline:
         if match is None:
             return None
         return cls._normalize_memory_text(match.group("content"))
+
+    @classmethod
+    def _extract_summary_command_content(cls, text: str) -> str | None:
+        match = cls._SUMMARY_COMMAND_PATTERN.match(text)
+        if match is None:
+            return None
+        raw_content = match.group("content")
+        if raw_content is None:
+            return ""
+        return cls._normalize_memory_text(raw_content)
+
+    @staticmethod
+    def _provider_is_usable(api_key: str) -> bool:
+        key = api_key.strip()
+        return bool(key and key != "replace_me")
+
+    @staticmethod
+    def _coerce_int(value: object, default: int = 0) -> int:
+        if isinstance(value, bool):
+            return default
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return default
+            try:
+                return int(stripped)
+            except ValueError:
+                return default
+        return default
+
+    @classmethod
+    def _coerce_optional_int(cls, value: object) -> int | None:
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            try:
+                return int(stripped)
+            except ValueError:
+                return None
+        return None
+
+    def _select_summary_provider_name(self) -> str | None:
+        if self.llm_client is None:
+            return None
+        preferred_routes = ("replyer", "memory", "planner")
+        for route_name in preferred_routes:
+            route = self.llm_client.models.get(route_name)
+            if route is None:
+                continue
+            provider = self.llm_client.providers.get(route.provider)
+            if provider is None:
+                continue
+            if self._provider_is_usable(provider.api_key):
+                return route.provider
+        for provider_name, provider in self.llm_client.providers.items():
+            if self._provider_is_usable(provider.api_key):
+                return provider_name
+        return None
+
+    async def _generate_summary_reply(self, system_prompt: str, user_prompt: str) -> str:
+        if self.llm_client is None:
+            raise RuntimeError("llm client unavailable")
+        provider_name = self._select_summary_provider_name()
+        if provider_name is None:
+            raise RuntimeError("no usable llm provider configured")
+
+        route_name = "summary_command"
+        original_route = self.llm_client.models.get(route_name)
+        self.llm_client.models[route_name] = ModelRoute(provider=provider_name, model="deepseek-reasoner")
+        try:
+            response = await self.llm_client.chat(route_name, system_prompt, user_prompt, temperature=0.2)
+        finally:
+            if original_route is None:
+                del self.llm_client.models[route_name]
+            else:
+                self.llm_client.models[route_name] = original_route
+        return response.content
+
+    @staticmethod
+    def _render_full_thread_context(posts: list[ForumPost]) -> str:
+        ordered_posts = sorted(posts, key=lambda post: Pipeline._coerce_int(post.get("post_number"), 0))
+        rendered: list[str] = []
+        for post in ordered_posts:
+            rendered.append(
+                "\n".join(
+                    [
+                        f"post_number={post.get('post_number')}",
+                        f"username={post.get('username')}",
+                        f"reply_to_post_number={post.get('reply_to_post_number') or 0}",
+                        f"created_at={post.get('created_at') or ''}",
+                        f"raw_text={post.get('raw_text') or ''}",
+                    ]
+                )
+            )
+        return "\n\n".join(rendered)
+
+    async def _fetch_all_topic_posts(self, forum_client: ForumClient, topic_id: int, fallback_posts: list[ForumPost]) -> list[ForumPost]:
+        topic = await forum_client.get_topic(topic_id)
+        stream_raw_value = topic.get("post_stream", {}).get("stream", [])
+        stream_raw = stream_raw_value if isinstance(stream_raw_value, list) else []
+        post_ids: list[int] = []
+        for item in stream_raw:
+            try:
+                post_ids.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        if not post_ids:
+            return sorted(fallback_posts, key=lambda post: self._coerce_int(post.get("post_number"), 0))
+
+        all_posts = await forum_client.get_posts(topic_id, post_ids)
+        if not all_posts:
+            return sorted(fallback_posts, key=lambda post: self._coerce_int(post.get("post_number"), 0))
+        return sorted(all_posts, key=lambda post: self._coerce_int(post.get("post_number"), 0))
+
+    async def _execute_summary_command(
+        self,
+        *,
+        forum_client: ForumClient,
+        event_id: int | None,
+        topic_id: int,
+        topic_title: str,
+        trigger_reason: str,
+        highest_post_number: int,
+        posts: list[ForumPost],
+        command_content: str,
+        command_author: str,
+        command_post_number: int | None,
+    ) -> ProcessEventResult:
+        self.database.note_topic_seen(topic_id, highest_post_number)
+        summary_system_prompt = self.prompt_loader.load("summary_prompt.md").strip()
+        all_posts = await self._fetch_all_topic_posts(forum_client, topic_id, posts)
+        full_thread_context = self._render_full_thread_context(all_posts)
+        summary_user_prompt = (
+            f"Topic id: {topic_id}\n"
+            + f"Topic title: {topic_title}\n"
+            + f"Trigger reason: {trigger_reason}\n"
+            + f"Command author: {command_author or '(unknown)'}\n"
+            + f"Command content: {command_content or '(empty)'}\n"
+            + "Thread posts (full):\n"
+            + full_thread_context
+        )
+        raw_reply = await self._generate_summary_reply(summary_system_prompt, summary_user_prompt)
+        outbound_content = Replyer.sanitize_reply_text(raw_reply)
+        if not outbound_content:
+            raise ValueError("summary command produced empty reply content")
+
+        decision = PlannerDecision(
+            should_reply=True,
+            priority="high",
+            target_username=command_author or None,
+            target_post_number=command_post_number,
+            reason="summary command",
+            style_notes="summary",
+            memory_action="none",
+        )
+        draft = ReplyDraft(
+            content=outbound_content,
+            target_post_number=command_post_number,
+            target_username=command_author or None,
+            skipped=False,
+        )
+
+        action = "summary_reply_draft"
+        if self.allow_send_reply and not getattr(forum_client, "read_only", False):
+            reply_response = await forum_client.reply(topic_id, outbound_content, command_post_number)
+            reply_post_id_raw = reply_response.get("id")
+            reply_post_id = reply_post_id_raw if isinstance(reply_post_id_raw, int) else None
+            self.database.record_reply(topic_id, outbound_content, reply_post_id, command_post_number)
+            action = "summary_reply_sent"
+
+        self.database.record_pipeline_run(
+            event_id=event_id,
+            topic_id=topic_id,
+            topic_title=topic_title,
+            trigger_reason=trigger_reason,
+            action=action,
+            decision=decision.to_dict(),
+            draft_content=draft.content,
+        )
+        return {
+            "action": action,
+            "pending_reply_id": None,
+            "topic_id": topic_id,
+            "topic_title": topic_title,
+            "post_count": len(all_posts),
+            "decision": decision.to_dict(),
+            "draft": draft.to_dict(),
+            "memory_hits": {},
+            "persona_modules": list(self.enabled_personas),
+            "planner_prompt_preview": summary_system_prompt[:200],
+            "replyer_prompt_preview": "summary_prompt.md",
+        }
 
     @classmethod
     def _extract_user_memory_updates(cls, payload: dict[str, object]) -> list[tuple[str, str, float]]:
@@ -865,6 +1066,35 @@ class Pipeline:
                     action="memory_command",
                     reason=reason,
                 )
+            summary_command_content = self._extract_summary_command_content(raw_text_value)
+            if summary_command_content is not None:
+                command_author_value = post.get("username")
+                command_author = command_author_value if isinstance(command_author_value, str) else ""
+                command_post_number_value = post.get("post_number")
+                command_post_number = self._coerce_optional_int(command_post_number_value)
+                try:
+                    return await self._execute_summary_command(
+                        forum_client=forum_client,
+                        event_id=event_id,
+                        topic_id=topic_id,
+                        topic_title=topic_title,
+                        trigger_reason=trigger_reason,
+                        highest_post_number=highest_post_number,
+                        posts=posts,
+                        command_content=summary_command_content,
+                        command_author=command_author,
+                        command_post_number=command_post_number,
+                    )
+                except Exception as exc:
+                    return self._record_short_circuit_run(
+                        event_id=event_id,
+                        topic_id=topic_id,
+                        topic_title=topic_title,
+                        trigger_reason=trigger_reason,
+                        highest_post_number=highest_post_number,
+                        action="summary_command_error",
+                        reason=f"summary command failed: {exc}",
+                    )
         result = await self.dry_run(topic_id, posts, trigger_reason)
         self.database.note_topic_seen(topic_id, highest_post_number)
         action = "reply" if result["decision"].should_reply else "skip"

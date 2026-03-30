@@ -18,7 +18,7 @@ from bot.pipeline import Pipeline
 from bot.planner import PlannerDecision
 from bot.prompt_loader import PromptLoader
 from bot.replyer import Replyer
-from bot.settings import CredentialsConfig, ForumConfig
+from bot.settings import CredentialsConfig, ForumConfig, ModelRoute, ProviderConfig
 from db.repositories import Database
 
 
@@ -135,6 +135,7 @@ def _make_pipeline(
     muted_topic_ids: list[int] | None = None,
     muted_usernames: list[str] | None = None,
     llm_client: LlmClient | None = None,
+    include_summary_prompt: bool = False,
 ) -> Pipeline:
     prompt_dir = tmp_path / "prompts"
     persona_dir = tmp_path / "personas"
@@ -146,6 +147,8 @@ def _make_pipeline(
     _ = (prompt_dir / "safety_rules.md").write_text("# Safety\nsafety", encoding="utf-8")
     _ = (prompt_dir / "memory_user_update.md").write_text("# Memory User\nmemory user", encoding="utf-8")
     _ = (prompt_dir / "memory_self_update.md").write_text("# Memory Self\nmemory self", encoding="utf-8")
+    if include_summary_prompt:
+        _ = (prompt_dir / "summary_prompt.md").write_text("# Summary\nsummary only", encoding="utf-8")
     _ = (persona_dir / "core.md").write_text("# Core\ncore persona", encoding="utf-8")
 
     database = Database(tmp_path / "test.sqlite3")
@@ -965,3 +968,171 @@ async def test_process_event_short_circuits_for_muted_target_user(tmp_path: Path
     assert pipeline.database.list_pending_replies() == []
     runs = pipeline.database.list_recent_pipeline_runs()
     assert runs[0]["action"] == "muted_user"
+
+
+class _SummaryLlmClient(LlmClient):
+    def __init__(self) -> None:
+        super().__init__(
+            providers={
+                "default": ProviderConfig(
+                    base_url="https://provider.example.com/v1/chat/completions",
+                    api_key="test_key",
+                    timeout_seconds=30,
+                )
+            },
+            models={
+                "replyer": ModelRoute(provider="default", model="deepseek-reasoner"),
+                "memory": ModelRoute(provider="default", model="deepseek-reasoner"),
+                "planner": ModelRoute(provider="default", model="deepseek-chat"),
+            },
+        )
+        self.calls: list[dict[str, str]] = []
+
+    @override
+    async def chat(self, route_name: str, system_prompt: str, user_prompt: str, temperature: float = 0.7) -> LlmResponse:
+        _ = temperature
+        self.calls.append(
+            {
+                "route_name": route_name,
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "model": self.models[route_name].model,
+            }
+        )
+        return LlmResponse(content="这是 summary 回帖。", model=self.models[route_name].model, provider="default")
+
+
+@pytest.mark.anyio
+async def test_process_event_summary_command_uses_summary_prompt_and_bypasses_normal_flow(tmp_path: Path) -> None:
+    decision = PlannerDecision(
+        should_reply=False,
+        priority="skip",
+        target_username=None,
+        target_post_number=None,
+        reason="no reply",
+        style_notes="none",
+        memory_action="none",
+    )
+    llm_client = _SummaryLlmClient()
+    pipeline = _make_pipeline(
+        tmp_path,
+        allow_send_reply=False,
+        decision=decision,
+        llm_client=llm_client,
+        include_summary_prompt=True,
+    )
+
+    class _SummaryCommandForumClient(FakeForumClient):
+        @override
+        async def get_topic(self, topic_id: int) -> dict[str, object]:
+            _ = topic_id
+            return {"title": "topic title", "highest_post_number": 3, "post_stream": {"stream": [11, 12, 13]}}
+
+        @override
+        async def get_topic_selected_posts(
+            self,
+            topic_id: int,
+            *,
+            include_first_post: bool = True,
+            recent_post_limit: int = 50,
+        ) -> list[dict[str, object]]:
+            _ = topic_id
+            _ = include_first_post
+            _ = recent_post_limit
+            return [
+                {"post_number": 2, "username": "bob", "reply_to_post_number": 1, "raw_text": "普通回复"},
+                {"post_number": 3, "username": "alice", "reply_to_post_number": 2, "raw_text": "/summary 请总结"},
+            ]
+
+        @override
+        async def get_posts(self, topic_id: int, post_ids: list[int]) -> list[dict[str, object]]:
+            _ = topic_id
+            _ = post_ids
+            return [
+                {
+                    "post_number": 1,
+                    "username": "starter",
+                    "reply_to_post_number": 0,
+                    "raw_text": "首帖内容",
+                    "created_at": "2026-01-01T00:00:00Z",
+                },
+                {
+                    "post_number": 2,
+                    "username": "bob",
+                    "reply_to_post_number": 1,
+                    "raw_text": "普通回复",
+                    "created_at": "2026-01-01T01:00:00Z",
+                },
+                {
+                    "post_number": 3,
+                    "username": "alice",
+                    "reply_to_post_number": 2,
+                    "raw_text": "/summary 请总结",
+                    "created_at": "2026-01-01T02:00:00Z",
+                },
+            ]
+
+    forum_client = _SummaryCommandForumClient(read_only=False)
+
+    result = await pipeline.process_event(forum_client, {"topic_id": 123, "reason": "notification"}, event_id=7)
+
+    assert result is not None
+    assert result["action"] == "summary_reply_draft"
+    assert result["post_count"] == 3
+    assert result["draft"]["content"] == "这是 summary 回帖。"
+    assert len(llm_client.calls) == 1
+    assert llm_client.calls[0]["route_name"] == "summary_command"
+    assert llm_client.calls[0]["model"] == "deepseek-reasoner"
+    assert llm_client.calls[0]["system_prompt"] == "# Summary\nsummary only"
+    assert "post_number=1" in llm_client.calls[0]["user_prompt"]
+    assert "post_number=3" in llm_client.calls[0]["user_prompt"]
+    assert "Thread posts (full):" in llm_client.calls[0]["user_prompt"]
+    assert forum_client.reply_calls == []
+
+
+@pytest.mark.anyio
+async def test_process_event_summary_command_sends_reply_when_enabled(tmp_path: Path) -> None:
+    decision = PlannerDecision(
+        should_reply=False,
+        priority="skip",
+        target_username=None,
+        target_post_number=None,
+        reason="no reply",
+        style_notes="none",
+        memory_action="none",
+    )
+    llm_client = _SummaryLlmClient()
+    pipeline = _make_pipeline(
+        tmp_path,
+        allow_send_reply=True,
+        decision=decision,
+        llm_client=llm_client,
+        include_summary_prompt=True,
+    )
+
+    class _SummarySendForumClient(FakeForumClient):
+        @override
+        async def get_topic_selected_posts(
+            self,
+            topic_id: int,
+            *,
+            include_first_post: bool = True,
+            recent_post_limit: int = 50,
+        ) -> list[dict[str, object]]:
+            _ = topic_id
+            _ = include_first_post
+            _ = recent_post_limit
+            return [
+                {"post_number": 1, "username": "alice", "reply_to_post_number": 0, "raw_text": "首帖"},
+                {"post_number": 2, "username": "alice", "reply_to_post_number": 1, "raw_text": "/summary"},
+            ]
+
+    forum_client = _SummarySendForumClient(read_only=False)
+
+    result = await pipeline.process_event(forum_client, {"topic_id": 123, "reason": "notification"}, event_id=7)
+
+    assert result is not None
+    assert result["action"] == "summary_reply_sent"
+    assert len(forum_client.reply_calls) == 1
+    assert forum_client.reply_calls[0]["reply_to_post_number"] == 2
+    assert forum_client.reply_calls[0]["raw"] == "这是 summary 回帖。"
