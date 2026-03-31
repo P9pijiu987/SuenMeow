@@ -106,8 +106,16 @@ def _enforce_protected_modules(route_name: str, route: PromptRouteConfig, availa
 def _public_editor_config(request: Request) -> dict[str, object]:
     prompts = sorted(path.name for path in _prompt_dir(request).glob("*.md"))
     settings = request.app.state.settings
+    # Backward compatibility: older public-editor clients still expect
+    # prompt_builtin/prompt_public/persona_builtin/persona_public buckets.
+    # After prompts/personas storage unification, they now all point to the
+    # same prompt file set.
     return {
         "prompts": prompts,
+        "prompt_builtin": prompts,
+        "prompt_public": prompts,
+        "persona_builtin": prompts,
+        "persona_public": prompts,
         "available_module_files": sorted(available_module_files(request.app.state.paths)),
         "prompt_modules": prompt_modules_to_dict(settings.prompt_modules),
     }
@@ -615,13 +623,23 @@ def get_public_config(request: Request) -> dict[str, object]:
 @router.get("/prompts", summary="读取提示词列表")
 def list_public_prompts(request: Request) -> dict[str, object]:
     data = _public_editor_config(request)
-    return {"files": data["prompts"]}
+    files = data["prompts"]
+    return {
+        "files": files,
+        "builtin": files,
+        "public": files,
+    }
 
 
 @router.get("/personas", summary="读取人格列表（与 prompts 合并）")
 def list_public_personas(request: Request) -> dict[str, object]:
     data = _public_editor_config(request)
-    return {"files": data["prompts"]}
+    files = data["prompts"]
+    return {
+        "files": files,
+        "builtin": files,
+        "public": files,
+    }
 
 
 @router.get("/memory", summary="只读记忆")

@@ -658,12 +658,30 @@ def test_public_editor_routes_use_unified_prompts_storage(tmp_path: Path) -> Non
     cfg = config_res.json()
     assert "planner.md" in cfg["prompts"]
     assert "core.md" in cfg["prompts"]
+    assert cfg["prompt_builtin"] == cfg["prompts"]
+    assert cfg["prompt_public"] == cfg["prompts"]
+    assert cfg["persona_builtin"] == cfg["prompts"]
+    assert cfg["persona_public"] == cfg["prompts"]
     assert cfg["prompt_modules"]["planner"][0] == {
         "name": "core.md",
         "enabled": True,
         "removable": False,
         "protected": True,
     }
+
+    public_prompts = client.get("/public/prompts")
+    assert public_prompts.status_code == 200
+    prompt_payload = public_prompts.json()
+    assert "planner.md" in prompt_payload["files"]
+    assert prompt_payload["builtin"] == prompt_payload["files"]
+    assert prompt_payload["public"] == prompt_payload["files"]
+
+    public_personas = client.get("/public/personas")
+    assert public_personas.status_code == 200
+    persona_payload = public_personas.json()
+    assert "core.md" in persona_payload["files"]
+    assert persona_payload["builtin"] == persona_payload["files"]
+    assert persona_payload["public"] == persona_payload["files"]
 
     builtin_read = client.get("/public/prompts/planner.md")
     assert builtin_read.status_code == 200
