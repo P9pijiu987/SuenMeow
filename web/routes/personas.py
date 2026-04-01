@@ -12,6 +12,20 @@ from bot.settings import write_prompt_file_with_backup
 router = APIRouter(prefix="/personas", tags=["人格（已合并到 prompts）"])
 
 
+def _read_markdown_with_fallback(path: Path) -> str:
+    data = path.read_bytes()
+    gb18030_text = data.decode("gb18030", errors="replace")
+    try:
+        utf8_text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return gb18030_text
+    utf8_cjk = sum(1 for ch in utf8_text if "\u4e00" <= ch <= "\u9fff")
+    gb18030_cjk = sum(1 for ch in gb18030_text if "\u4e00" <= ch <= "\u9fff")
+    if gb18030_cjk > utf8_cjk:
+        return gb18030_text
+    return utf8_text
+
+
 class MarkdownContentPayload(BaseModel):
     content: str
 
@@ -52,7 +66,7 @@ def get_persona(filename: str, request: Request) -> dict[str, object]:
     path = _resolve_existing_markdown_file(persona_dir, filename)
     return {
         "file": filename,
-        "content": path.read_text(encoding="utf-8"),
+        "content": _read_markdown_with_fallback(path),
     }
 
 
