@@ -562,7 +562,7 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
           return;
         }}
         const data = await res.json();
-        document.getElementById('prompt-content').value = data.content ?? '';
+        document.getElementById('prompt-content').value = data.content == null ? '' : data.content;
       }} catch (_error) {{ setStatus('prompt-status', '加载失败', true); }}
     }}
     async function savePrompt() {{
@@ -601,7 +601,7 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
         }}
         const data = await res.json();
         // Self
-        document.getElementById('self-memory').value = data.self_memory ?? '';
+        document.getElementById('self-memory').value = data.self_memory == null ? '' : data.self_memory;
         
         // Users
         userMemoriesData = data.user_memories || [];
@@ -669,11 +669,11 @@ def create_app(root: Path, app_mode: str = "admin") -> FastAPI:
     // Prompt module orchestration
     function escapeHtml(value) {{
       return String(value)
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     }}
 
     function renderPromptModuleRoute(route) {{

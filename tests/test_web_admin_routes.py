@@ -724,6 +724,8 @@ def test_public_editor_home_uses_admin_like_layout_with_limited_panels(tmp_path:
     assert "受保护模块不可移出" in text
     assert "loadMemoryView" in text
     assert "loadLogs" in text
+    assert "replaceAll(" not in text
+    assert "??" not in text
     assert "loadAllMemories" not in text
     assert "saveSelfMemory" not in text
     assert "saveUserMemory" not in text
@@ -776,6 +778,18 @@ def test_public_app_root_redirects_to_public_editor(tmp_path: Path) -> None:
 
     not_found = client.get("/prompts", follow_redirects=False)
     assert not_found.status_code == 404
+
+
+def test_admin_home_script_avoids_modern_js_syntax_for_legacy_browsers(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    app = create_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/")
+    assert response.status_code == 200
+    text = response.text
+    assert "replaceAll(" not in text
+    assert "??" not in text
 
 
 def test_admin_login_required_when_enable_auth_true(tmp_path: Path) -> None:

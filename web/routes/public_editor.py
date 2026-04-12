@@ -297,11 +297,11 @@ def public_editor_index() -> str:
 
     function escapeHtml(value) {
       return String(value)
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     }
 
     async function readErrorDetail(res, fallback) {
@@ -354,7 +354,7 @@ def public_editor_index() -> str:
           return;
         }
         const data = await res.json();
-        document.getElementById('prompt-content').value = data.content ?? '';
+        document.getElementById('prompt-content').value = data.content == null ? '' : data.content;
       } catch (_error) {
         setStatus('prompt-status', '加载失败', true);
       }
@@ -537,7 +537,7 @@ def public_editor_index() -> str:
           return;
         }
         const data = await res.json();
-        document.getElementById('self-memory').value = data.self_memory ?? '';
+        document.getElementById('self-memory').value = data.self_memory == null ? '' : data.self_memory;
         userMemoriesData = data.user_memories || [];
 
         const select = document.getElementById('user-memory-select');
