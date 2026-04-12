@@ -54,31 +54,17 @@ def _prompt_dir(request: Request) -> Path:
     return paths.prompt_dir
 
 
-def _read_markdown_with_fallback(path: Path) -> str:
-    data = path.read_bytes()
-    gb18030_text = data.decode("gb18030", errors="replace")
-    try:
-        utf8_text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        return gb18030_text
-    utf8_cjk = sum(1 for ch in utf8_text if "\u4e00" <= ch <= "\u9fff")
-    gb18030_cjk = sum(1 for ch in gb18030_text if "\u4e00" <= ch <= "\u9fff")
-    if gb18030_cjk > utf8_cjk:
-        return gb18030_text
-    return utf8_text
-
-
 def _read_prompt_content(request: Request, filename: str) -> tuple[str, bool]:
     prompt_file = _prompt_dir(request) / filename
     if prompt_file.is_file():
-        return _read_markdown_with_fallback(prompt_file), False
+        return prompt_file.read_text(encoding="utf-8"), False
     raise HTTPException(status_code=404, detail="未找到提示词文件")
 
 
 def _read_persona_content(request: Request, filename: str) -> tuple[str, bool]:
     prompt_file = _prompt_dir(request) / filename
     if prompt_file.is_file():
-        return _read_markdown_with_fallback(prompt_file), False
+        return prompt_file.read_text(encoding="utf-8"), False
     raise HTTPException(status_code=404, detail="未找到人格文件")
 
 

@@ -110,19 +110,6 @@ def test_prompt_routes_support_read_and_update(tmp_path: Path) -> None:
     _assert_prompt_backup_created(tmp_path, "planner")
 
 
-def test_prompt_route_reads_gb18030_file_with_fallback(tmp_path: Path) -> None:
-    _write_config(tmp_path)
-    gb_file = tmp_path / "prompts" / "gbk_prompt.md"
-    _ = gb_file.write_bytes("你好，世界".encode("gb18030"))
-    app = create_app(tmp_path)
-
-    with TestClient(app) as client:
-        response = client.get("/prompts/gbk_prompt.md")
-
-    assert response.status_code == 200
-    assert response.json() == {"file": "gbk_prompt.md", "content": "你好，世界"}
-
-
 def test_prompt_routes_support_create_new_file(tmp_path: Path) -> None:
     _write_config(tmp_path)
     app = create_app(tmp_path)
@@ -177,19 +164,6 @@ def test_persona_and_self_memory_routes_support_update(tmp_path: Path) -> None:
 
     assert (tmp_path / "prompts" / "core.md").read_text(encoding="utf-8") == "new core"
     _assert_prompt_backup_created(tmp_path, "core")
-
-
-def test_persona_route_reads_gb18030_file_with_fallback(tmp_path: Path) -> None:
-    _write_config(tmp_path)
-    gb_file = tmp_path / "prompts" / "gbk_persona.md"
-    _ = gb_file.write_bytes("喵喵人格".encode("gb18030"))
-    app = create_app(tmp_path)
-
-    with TestClient(app) as client:
-        response = client.get("/personas/gbk_persona.md")
-
-    assert response.status_code == 200
-    assert response.json() == {"file": "gbk_persona.md", "content": "喵喵人格"}
 
 
 def test_persona_routes_support_create_new_file(tmp_path: Path) -> None:
@@ -719,26 +693,6 @@ def test_public_editor_routes_use_unified_prompts_storage(tmp_path: Path) -> Non
     _assert_prompt_backup_created(tmp_path, "planner")
     _assert_prompt_backup_created(tmp_path, "custom_public")
     _assert_prompt_backup_created(tmp_path, "helper_public")
-
-
-def test_public_prompt_and_persona_routes_read_gb18030_file_with_fallback(tmp_path: Path) -> None:
-    _write_config(tmp_path)
-    gb_file = tmp_path / "prompts" / "gbk_public.md"
-    _ = gb_file.write_bytes("公网可读".encode("gb18030"))
-    app = create_app(tmp_path, app_mode="public")
-    client = TestClient(app)
-
-    prompt_res = client.get("/public/prompts/gbk_public.md")
-    assert prompt_res.status_code == 200
-    assert prompt_res.json()["file"] == "gbk_public.md"
-    assert prompt_res.json()["content"] == "公网可读"
-    assert prompt_res.json()["readonly"] is False
-
-    persona_res = client.get("/public/personas/gbk_public.md")
-    assert persona_res.status_code == 200
-    assert persona_res.json()["file"] == "gbk_public.md"
-    assert persona_res.json()["content"] == "公网可读"
-    assert persona_res.json()["readonly"] is False
 
 
 def test_public_editor_memory_is_readonly(tmp_path: Path) -> None:
