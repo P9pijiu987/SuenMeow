@@ -204,6 +204,61 @@ async def test_request_retries_once_on_401_without_session_probe(monkeypatch: py
 
 
 @pytest.mark.anyio
+async def test_request_unauthorized_during_login_cooldown_skips_relogin() -> None:
+    calls: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(f"{request.method} {request.url.path}")
+        return httpx.Response(403, text="forbidden", request=request)
+
+    client = _make_client(transport=httpx.MockTransport(handler))
+    client._set_login_cooldown(30.0)
+
+    try:
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await client.request("GET", "/latest.json")
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.response is not None
+    assert exc_info.value.response.status_code == 403
+    assert calls == ["GET /latest.json"]
+
+
+@pytest.mark.anyio
+async def test_login_429_sets_login_cooldown_from_retry_after() -> None:
+    calls: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(f"{request.method} {request.url.path}")
+        if request.url.path == "/session/passkey/challenge.json":
+            return httpx.Response(200, request=request)
+        if request.url.path == "/session/csrf":
+            return httpx.Response(200, json={"csrf": "csrf-token"}, request=request)
+        if request.url.path == "/session":
+            return httpx.Response(429, headers={"Retry-After": "9"}, request=request)
+        return httpx.Response(500, request=request)
+
+    client = _make_client(transport=httpx.MockTransport(handler))
+
+    try:
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await client.login()
+        cooldown_seconds = client._remaining_login_cooldown_seconds()
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.response is not None
+    assert exc_info.value.response.status_code == 429
+    assert cooldown_seconds > 0.0
+    assert calls == [
+        "GET /session/passkey/challenge.json",
+        "GET /session/csrf",
+        "POST /session",
+    ]
+
+
+@pytest.mark.anyio
 async def test_request_includes_response_body_preview_in_http_status_error() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(422, text='{"errors":["Body is too short"]}', request=request)

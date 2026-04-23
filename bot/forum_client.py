@@ -47,6 +47,8 @@ class ForumClient:
         self.credentials = credentials
         self.read_only = read_only
         self.csrf_token = ""
+        self._login_lock = asyncio.Lock()
+        self._login_cooldown_deadline = 0.0
         self.client = httpx.AsyncClient(
             headers={
                 "user-agent": forum.user_agent,
@@ -88,23 +90,6 @@ class ForumClient:
     async def aclose(self) -> None:
         await self.client.aclose()
 
-    async def login(self) -> None:
-        await self.client.get(f"{self.forum.base_url}/session/passkey/challenge.json")
-        csrf_response = await self.client.get(f"{self.forum.base_url}/session/csrf")
-        csrf_response.raise_for_status()
-        self.csrf_token = csrf_response.json()["csrf"]
-        response = await self.client.post(
-            f"{self.forum.base_url}/session",
-            headers={"x-csrf-token": self.csrf_token},
-            data={
-                "login": self.credentials.username,
-                "password": self.credentials.password,
-                "second_factor_method": "1",
-                "timezone": "Asia/Shanghai",
-            },
-        )
-        response.raise_for_status()
-
     @staticmethod
     def _parse_retry_after_seconds(retry_after: str | None) -> float:
         if retry_after is None:
@@ -124,6 +109,57 @@ class ForumClient:
             parsed = parsed.replace(tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
         return max(0.0, (parsed.astimezone(timezone.utc) - now).total_seconds())
+
+    def _remaining_login_cooldown_seconds(self) -> float:
+        if self._login_cooldown_deadline <= 0.0:
+            return 0.0
+        now = asyncio.get_running_loop().time()
+        return max(0.0, self._login_cooldown_deadline - now)
+
+    def _set_login_cooldown(self, wait_seconds: float) -> float:
+        normalized = max(0.0, wait_seconds)
+        if normalized <= 0.0:
+            return self._remaining_login_cooldown_seconds()
+        now = asyncio.get_running_loop().time()
+        self._login_cooldown_deadline = max(self._login_cooldown_deadline, now + normalized)
+        return self._login_cooldown_deadline - now
+
+    def _clear_login_cooldown(self) -> None:
+        self._login_cooldown_deadline = 0.0
+
+    async def login(self) -> None:
+        async with self._login_lock:
+            cooldown_seconds = self._remaining_login_cooldown_seconds()
+            if cooldown_seconds > 0.0:
+                logger.warning("forum login cooldown active; wait_seconds=%s", cooldown_seconds)
+                await asyncio.sleep(cooldown_seconds)
+                self._clear_login_cooldown()
+
+            await self.client.get(f"{self.forum.base_url}/session/passkey/challenge.json")
+            csrf_response = await self.client.get(f"{self.forum.base_url}/session/csrf")
+            csrf_response.raise_for_status()
+            self.csrf_token = csrf_response.json()["csrf"]
+            response = await self.client.post(
+                f"{self.forum.base_url}/session",
+                headers={"x-csrf-token": self.csrf_token},
+                data={
+                    "login": self.credentials.username,
+                    "password": self.credentials.password,
+                    "second_factor_method": "1",
+                    "timezone": "Asia/Shanghai",
+                },
+            )
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After")
+                wait_seconds = max(1.0, self._parse_retry_after_seconds(retry_after))
+                self._set_login_cooldown(wait_seconds)
+                logger.warning(
+                    "forum login rate limited; retry_after=%s wait_seconds=%s",
+                    retry_after,
+                    wait_seconds,
+                )
+            response.raise_for_status()
+            self._clear_login_cooldown()
 
     async def request(self, method: str, path: str, *, retry_on_auth: bool = True, **kwargs: Any) -> httpx.Response:
         url = path if path.startswith("http") else f"{self.forum.base_url}{path}"
@@ -155,6 +191,17 @@ class ForumClient:
                 continue
 
             if retry_on_auth and response.status_code in {401, 403} and auth_retries_remaining > 0:
+                cooldown_seconds = self._remaining_login_cooldown_seconds()
+                if cooldown_seconds > 0.0:
+                    logger.warning(
+                        "forum request unauthorized during login cooldown; skip relogin; method=%s path=%s attempt=%s status_code=%s wait_seconds=%s",
+                        method,
+                        path,
+                        attempt,
+                        response.status_code,
+                        cooldown_seconds,
+                    )
+                    break
                 logger.warning(
                     "forum request unauthorized; relogin and retry; method=%s path=%s attempt=%s status_code=%s",
                     method,
