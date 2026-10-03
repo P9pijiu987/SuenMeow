@@ -18,7 +18,16 @@ def mount_agent_api(app, db, vault, admin):
     def task_data(s, task):
         draft = s.scalar(select(AgentDraft).where(AgentDraft.task_id == task.id))
         reply = s.get(Reply, draft.reply_id) if draft and draft.reply_id else None
+        control, worker = s.get(KV, "control").data, s.get(KV, "worker").data
+        block = ""
+        if task.cancelled or task.expires <= now():
+            block = "任务已停止或过期，请重新研究"
+        elif control["mode"] not in ("approval", "auto"):
+            block = "当前为暂停或只读模式，草稿可以预览，不能发送"
+        elif worker.get("status") != "online" or worker.get("baseline_epoch") != control["epoch"] or now() - worker.get("heartbeat", 0) > 60:
+            block = "等待 worker 在线并建立新水位"
         return {"id": task.id, "session_id": task.session_id, "state": task.state, "reason": task.reason,
+                "snapshot_id": task.snapshot_id, "send_block_reason": block,
                 "created": task.created, "expires": task.expires, "cancelled": task.cancelled,
                 "constraints": {k: v for k, v in task.constraints.items() if k != "policy"},
                 "result": vault.open(task.result_cipher) if task.result_cipher else "",

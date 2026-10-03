@@ -66,10 +66,12 @@ class Model:
         self.turns = list(turns)
         self.messages = []
         self.choices = []
+        self.offered = []
 
     async def tool_turn(self, messages, tools, topic, policy, task_id, task_limit, tool_choice="auto"):
         self.messages = list(messages)
         self.choices.append(tool_choice)
+        self.offered.append([tool["function"]["name"] for tool in tools])
         response = self.turns.pop(0)
         if callable(response):
             response = await response(messages)
@@ -210,6 +212,19 @@ async def test_exhausted_read_budget_requires_final_answer_without_more_tools(en
         assert s.get(AgentTask, tid).state == "completed"
 
 
+@pytest.mark.asyncio
+async def test_last_reply_step_only_offers_draft_without_named_tool_choice(env):
+    _, db, _, _ = env
+    with db.transaction() as s:
+        s.get(KV, "agent_policy").data = AgentPolicy(max_steps=2).model_dump()
+    db, vault, _, tid = prepare(env, kind="reply", target_topic=100)
+    model = Model([call("draft_reply", {"text": "有界草稿，不发送。"})])
+    await AgentEngine(db, vault, Forum(), model, tid).run()
+    assert model.choices == ["auto"] and model.offered == [["draft_reply"]]
+    with db.transaction() as s:
+        assert s.get(AgentTask, tid).state == "awaiting_confirmation"
+
+
 def test_admin_session_isolation_editor_denial_and_csrf(env, client):
     _, db, vault, ids = env
     login(client)
@@ -245,6 +260,22 @@ def test_worker_restart_interrupts_old_commands_and_limits_task_budget(env):
         reserve(db, "agent", 100, 200, policy, tid, 1000)
     settle(db, usage, 200)
     reserve(db, "agent", 100, 700, policy, tid, 1000)
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_applies_to_both_model_paths_and_plain_turn_payload(env):
+    _, db, _, _ = env
+    def respond(request):
+        assert json.loads(request.content)["reasoning_effort"] == "low"
+        return httpx.Response(200, json={"choices": [{"message": {"content": "OK", "reasoning_content": "opaque-only"}, "finish_reason": "stop"}],
+                                         "usage": {"total_tokens": 20}})
+    conf = {"base_url": "https://model.test/v1", "model": "test", "api_key": "test", "max_output": 100,
+            "temperature": 0, "supports_tools": True, "reasoning_effort": "low"}
+    models = Models(db, {"planner": conf, "agent": conf}, httpx.MockTransport(respond))
+    assert await models.complete("planner", [], 0, Policy()) == "OK"
+    message, cut = await models.tool_turn([], [], 0, Policy(), "probe", 10000)
+    assert not cut and message["reasoning_content"] == "opaque-only" and not message.get("tool_calls")
+    await models.close()
 
 
 @pytest.mark.asyncio

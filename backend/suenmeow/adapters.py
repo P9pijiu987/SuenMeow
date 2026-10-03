@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 import json
+import logging
 from urllib.parse import quote
 
 import httpx
@@ -223,7 +224,8 @@ class Models:
             response = await self.client.post(self.endpoint(conf),
                 headers={"Authorization": "Bearer " + conf["api_key"]},
                 json={"model": conf["model"], "messages": messages, "tools": tools, "tool_choice": tool_choice,
-                      "max_tokens": conf["max_output"], "temperature": conf["temperature"]})
+                      "max_tokens": conf["max_output"], "temperature": conf["temperature"],
+                      **({"reasoning_effort": conf["reasoning_effort"]} if conf.get("reasoning_effort", "default") != "default" else {})})
             response.raise_for_status()
             data = response.json()
             tokens = data.get("usage", {}).get("total_tokens")
@@ -234,14 +236,19 @@ class Models:
             result = {"role": "assistant", "content": message.get("content") or ""}
             if message.get("tool_calls"):
                 result["tool_calls"] = message["tool_calls"]
-                # Some compatible providers require this opaque payload on the next tool turn.
-                # It remains in memory only; steps/results never store or expose it.
-                if isinstance(message.get("reasoning_content"), str):
-                    result["reasoning_content"] = message["reasoning_content"]
+            # Some compatible providers require this opaque payload even after a plain-text turn.
+            # It remains in memory only; steps/results never store or expose it.
+            if isinstance(message.get("reasoning_content"), str):
+                result["reasoning_content"] = message["reasoning_content"]
             settle(self.db, usage_id, actual)
             return result, choice.get("finish_reason") == "length"
-        except Exception:
+        except Exception as exc:
             settle(self.db, usage_id, actual, failed=True)
+            if isinstance(exc, httpx.HTTPStatusError):
+                # Provider errors may repeat prompts or credentials; log only fixed classifications.
+                body = exc.response.text.lower()
+                categories = [key for key in ("reasoning_content", "tool_choice", "tool_call", "max_tokens", "messages", "rate_limit") if key in body]
+                logging.getLogger("suenmeow.models").warning("tool request rejected: status=%s fields=%s", exc.response.status_code, categories)
             raise
 
     async def complete(self, route: str, messages: list, topic_id: int, policy: Policy):
@@ -256,7 +263,8 @@ class Models:
             r = await self.client.post(self.endpoint(conf),
                                        headers={"Authorization": "Bearer " + conf["api_key"]},
                                        json={"model": conf["model"], "messages": messages,
-                                             "max_tokens": conf["max_output"], "temperature": conf["temperature"]})
+                                             "max_tokens": conf["max_output"], "temperature": conf["temperature"],
+                                             **({"reasoning_effort": conf["reasoning_effort"]} if conf.get("reasoning_effort", "default") != "default" else {})})
             r.raise_for_status()
             data = r.json()
             u = data.get("usage", {})

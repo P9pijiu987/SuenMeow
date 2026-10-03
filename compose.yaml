@@ -76,6 +76,11 @@ services:
       context: .
       dockerfile: deploy/Frontend.Dockerfile
     image: suenmeow2-gateway:2.0.0
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
     ports: ["127.0.0.1:8000:8080"]
     depends_on:
       api:

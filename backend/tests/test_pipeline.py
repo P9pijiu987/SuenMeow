@@ -70,6 +70,25 @@ async def test_restart_discards_existing_ready_draft(env):
     with env[1].transaction() as s: assert s.get(Reply, rid).state == "expired"
 
 
+async def test_new_notification_cannot_revive_old_visible_posts(env):
+    epoch, version = activate(env)
+    class OldVisibleForum(GoodForum):
+        async def topic(self, tid, limit):
+            data = await super().topic(tid, limit)
+            for post in data["context"]:
+                post["created"] = datetime.fromtimestamp(now() - 3600, timezone.utc).isoformat()
+            return data
+    models = GoodModels()
+    w = Worker(env[1], env[2]); w.forum = OldVisibleForum(); w.models = models
+    await w.baseline(epoch)
+    eid = add_event(env[1], "n:new-id-old-post", 42, {"source": "notification", "username": "human"}, epoch, version, 600)
+    await w.draft_one()
+    assert not models.routes and w.forum.calls == 0
+    with env[1].transaction() as s:
+        assert s.get(Event, eid).state == "skipped"
+        assert not s.scalar(select(Reply))
+
+
 async def test_small_hot_increments_accumulate(env):
     epoch, version = activate(env)
     w = Worker(env[1], env[2]); w.forum = FakeForum()

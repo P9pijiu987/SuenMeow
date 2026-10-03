@@ -30,7 +30,7 @@ def compact_posts(posts, size=800):
 
 
 def system_prompt(snapshot: dict, route: str):
-    return SYSTEM_RULES + "\n\n" + "\n\n".join(snapshot["modules"][i]["content"] for i in snapshot["pipeline"][route])
+    return "\n\n".join(snapshot["modules"][i]["content"] for i in snapshot["pipeline"][route]) + "\n\n" + SYSTEM_RULES
 
 
 class Worker:
@@ -214,6 +214,9 @@ class Worker:
             last_other = next((post for post in reversed(posts) if post["username"].casefold() != username.casefold()), None)
             if topic.get("closed") or topic.get("archived") or not last_other:
                 return self.skip(eid, "主题关闭、归档或无新对话")
+            visible_created = timestamp(last_other.get("created"))
+            if meta["source"] in ("notification", "hot") and visible_created and visible_created <= self.baseline_time:
+                return self.skip(eid, "没有新水位后的可见用户发言")
             if posts and posts[-1]["username"].casefold() == username.casefold() and meta["source"] not in ("diary", "followup"):
                 return self.skip(eid, "最后一条已是自己的回复")
             if last_other["username"] in p.muted_users:
@@ -253,7 +256,8 @@ class Worker:
                         row.data, row.updated, row.version = {"cipher": self.vault.seal(data)}, now(), row.version + 1
                     elif owner:
                         s.add(Record(kind="memory", owner=owner.id, title=title, data={"cipher": self.vault.seal(data)}))
-            plan = json_output(await self.models.complete("planner", [{"role": "system", "content": system_prompt(snapshot, "planner") + '\n必须返回 {"reply": true/false, "reason": "理由"} JSON。'},
+            plan = json_output(await self.models.complete("planner", [{"role": "system", "content": system_prompt(snapshot, "planner") +
+                '\n当前协议：用户消息是 JSON 对话资料，posts 包含作者和正文，source=notification 表示收到论坛通知。根据最近有效发言判断是否参与，直接点名或询问你的合理问题应优先回复。只返回 {"reply": true/false, "reason": "理由"} JSON，不能使用旧协议字段。'},
                                             {"role": "user", "content": raw}], topic_id, p))
             if plan.get("reply") is not True:
                 return self.skip(eid, "规划器决定跳过")
@@ -268,7 +272,8 @@ class Worker:
                     raw = json.dumps(context, ensure_ascii=False)
             if meta["source"] == "followup" and (not isinstance(plan.get("reason"), str) or not plan["reason"].strip()):
                 return self.skip(eid, "没有明确的未完话题跟进理由")
-            reply = await self.models.complete("replyer", [{"role": "system", "content": system_prompt(snapshot, "replyer")},
+            reply = await self.models.complete("replyer", [{"role": "system", "content": system_prompt(snapshot, "replyer") +
+                '\n当前协议：只输出可直接发布的完整回复正文。不要返回 JSON、规划字段、工具指令或隐藏思维链；保持已选人格与语气。'},
                                           {"role": "user", "content": raw}], topic_id, p)
             if len(reply) > p.max_reply_chars:
                 return self.skip(eid, "模型回复超过长度限制")

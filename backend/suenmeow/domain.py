@@ -65,6 +65,7 @@ class Route(Strict):
     temperature: float = Field(0.7, ge=0, le=2)
     supports_tools: bool = False
     endpoint_mode: Literal["base", "complete"] = "base"
+    reasoning_effort: Literal["default", "none", "low", "medium", "high", "max"] = "default"
     @field_validator("base_url")
     @classmethod
     def url(cls, v):
