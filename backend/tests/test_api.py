@@ -52,6 +52,21 @@ def test_secrets_masked_and_encrypted(client, env):
         assert env[2].open(s.get(KV, "connection:forum").data["cipher"])["password"] == "not-a-real-password"
 
 
+def test_validation_errors_do_not_echo_credentials(client):
+    password = "private-password-fixture-" * 20
+    response = client.post("/api/auth/login", json={"username": "admin", "password": password})
+    assert response.status_code == 422
+    assert password not in response.text
+    login(client)
+    key = "private-api-key-fixture"
+    response = client.put("/api/connections/planner", json={
+        "base_url": "https://model.example.com/v1", "model": "example",
+        "api_key": key, "max_output": "invalid", "unexpected_secret": key,
+    })
+    assert response.status_code == 422
+    assert key not in response.text
+
+
 def test_publish_immutable_and_restore(client, env):
     login(client)
     first = client.post("/api/config/publish", json={"note": "first"}).json()["version"]

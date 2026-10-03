@@ -3,6 +3,7 @@ import secrets
 import time
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import Field, ValidationError
 import pyotp
@@ -66,6 +67,11 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     app = FastAPI(title="SuenMeow", version="2.0.0", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db, app.state.vault = db, vault
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_input(request: Request, exc: RequestValidationError):
+        # Framework error payloads include raw input, including passwords and keys.
+        return JSONResponse({"detail": "输入格式不正确，请检查必填项、字段类型和范围"}, status_code=422)
 
     @app.middleware("http")
     async def headers(request: Request, call_next):

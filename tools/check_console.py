@@ -15,6 +15,9 @@ async def check():
         health.raise_for_status()
         unauthenticated = await client.get("/api/dashboard")
         assert unauthenticated.status_code == 401
+        invalid_password = "invalid-private-fixture-" * 20
+        rejected = await client.post("/api/auth/login", json={"username": "admin", "password": invalid_password})
+        assert rejected.status_code == 422 and invalid_password not in rejected.text
         password = Path("/run/secrets/probe_admin_password").read_text().strip()
         response = await client.post("/api/auth/login", json={"username": "admin", "password": password, "code": ""},
                                      headers={"Origin": origin})
@@ -38,6 +41,7 @@ async def check():
         print(json.dumps({"https_health": health.json(), "unauthenticated_status": 401, "login_verified": True,
                           "secure_httponly_samesite_cookie": True, "csrf_rejection": 403, "origin_rejection": 403,
                           "logout_revoked": True, "mode": dashboard.json()["control"]["mode"],
+                          "validation_secret_echo_rejected": True,
                           "worker_status": dashboard.json()["worker"]["status"]}))
 
 
