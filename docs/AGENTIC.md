@@ -166,3 +166,7 @@ A1、A2 可在模拟论坛中完成；A3 浏览器验收不发帖。真实论坛
 - 帖子内的伪管理员指令不能升级权限、调用写工具或泄露密钥与私信。
 - 工具循环、总时间、步骤、并发与预算都有硬限制；取消后不会继续写入论坛。
 - 超时、崩溃、刷新、SSE 重连和重启不重复发送。
+
+## 提供方兼容核对
+
+2026-10-04 对照 [DeepSeek 思考模式文档](https://api-docs.deepseek.com/guides/thinking_mode/) 与 [Chat Completions 参数](https://api-docs.deepseek.com/api/create-chat-completion/)：`reasoning_effort=low` 是支持的参数，带工具调用的后续轮次应传回历史 `reasoning_content`。代码仅在任务内存中保留该载荷。文档核对不能代替真实长文验收；继续真实检查仍需把迁移 prompts 与必要论坛上下文发送给已配置的提供方。
