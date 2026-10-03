@@ -1,0 +1,97 @@
+name: suenmeow2
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: deploy/Dockerfile
+    target: backend
+  image: suenmeow2-backend:2.0.0
+  environment:
+    DATABASE_URL: ${DATABASE_URL:?Generate .env using tools/prepare_deploy.py}
+    PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-https://suenmeow.p9pijiu.com}
+    ENCRYPTION_KEY_FILE: /run/secrets/encryption_key
+  secrets:
+    - encryption_key
+  depends_on:
+    database:
+      condition: service_healthy
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: [no-new-privileges:true]
+  mem_limit: 256m
+  cpus: 0.5
+services:
+  test:
+    <<: *backend
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      target: test
+    image: suenmeow2-test:2.0.0
+    command: [env, SUENMEOW_TEST_POSTGRES=1, python, -m, pytest, -q, -p, no:cacheprovider]
+    restart: "no"
+    profiles: [test]
+  database:
+    image: registry-1.docker.io/library/postgres:17-alpine
+    environment:
+      POSTGRES_DB: suenmeow
+      POSTGRES_USER: suenmeow
+      POSTGRES_PASSWORD_FILE: /run/secrets/database_password
+    secrets: [database_password]
+    volumes: [database:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U suenmeow -d suenmeow"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    security_opt: [no-new-privileges:true]
+  init:
+    <<: *backend
+    command: [suenmeow, init, --username, admin, --password-file, /run/secrets/admin_password]
+    secrets: [encryption_key, admin_password]
+    restart: "no"
+    profiles: [setup]
+  api:
+    <<: *backend
+    command: [suenmeow, api]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  worker:
+    <<: *backend
+    command: [suenmeow, worker]
+    healthcheck:
+      test: [CMD, python, -m, suenmeow.health]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+  gateway:
+    build:
+      context: .
+      dockerfile: deploy/Frontend.Dockerfile
+    image: suenmeow2-gateway:2.0.0
+    ports: ["127.0.0.1:8000:8080"]
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp, /var/cache/nginx, /var/run]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 64m
+    cpus: 0.25
+volumes:
+  database:
+secrets:
+  encryption_key:
+    file: ./secrets/encryption.key
+  database_password:
+    file: ./secrets/database.password
+  admin_password:
+    file: ./secrets/admin.password
