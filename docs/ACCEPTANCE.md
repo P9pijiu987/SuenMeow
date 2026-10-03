@@ -57,3 +57,5 @@
 
 - 新增输入校验保密回归：先证明框架 422 响应回显超长密码，再改为固定错误提示；无效连接输入的 API Key/额外字段也不回显。最新本地全套为 48 通过、5 跳过，MacBook PostgreSQL 为 53 全部通过。
 - 本地模拟 Agent GUI 显示 1114 字符草稿，编辑保存后为 1136 字符/v2，页面显示暂停禁止发送，确认按钮不可用；数据库核对未批准、没有回复队列。验收任务随后停止。截图 `screenshots/agent-draft-edit.png`；没有真实模型请求，不替代真实长文验收。
+
+- 778c598 安全修复部署后四容器均 healthy；公开 HTTPS 再次验证登录/CSRF/来源拒绝/注销吊销和 422 不回显密码。运行模式只读，control epoch 与 worker baseline_epoch 均为 10，事件/回复计数均为 0。只读闲置内存采样：API 66 MiB、worker 68 MiB、gateway 8 MiB、PostgreSQL 85 MiB，均在 Compose 限额内；不代表峰值负载测试。原有 napcat/astrbot 四服务仍运行，旧 SuenMeow 三容器停止。
