@@ -44,6 +44,35 @@ async def test_complete_notification_approval_send_memory_path(env):
         assert env[2].open(memory.data["cipher"])["source_post_id"] == 20
 
 
+async def test_memory_rejects_bot_and_wrong_author_sources(env):
+    epoch, version = activate(env, "approval")
+    eid = add_event(env[1], "n:fact-sources", 42, {"source": "notification", "username": "human"}, epoch, version, 600)
+    class MixedForum(GoodForum):
+        async def topic(self, tid, limit):
+            data = await super().topic(tid, limit)
+            data["context"].append({"id": 22, "number": 3, "username": "cat", "text": "我猜 human 喜欢音乐"})
+            return data
+    class MixedModels(GoodModels):
+        async def complete(self, route, messages, topic_id, policy):
+            if route == "memory":
+                payload = json.loads(messages[-1]["content"])
+                assert payload["bot_username"] == "cat" and payload["posts"]
+                return json.dumps({"facts": [
+                    {"username": "cat", "text": "机器人自述", "source_post_id": 22},
+                    {"username": "human", "text": "喜欢音乐", "source_post_id": 22},
+                    {"username": "human", "text": "喜欢盆栽", "source_post_id": 20},
+                ]})
+            return await super().complete(route, messages, topic_id, policy)
+    with env[1].transaction() as s:
+        s.add(Reply(event_id=eid, topic_id=42, state="sent", sent_post_id=22, text_cipher=env[2].seal("已发送")))
+    worker = Worker(env[1], env[2]); worker.forum = MixedForum(); worker.models = MixedModels()
+    await worker.remember_one()
+    with env[1].transaction() as s:
+        facts = list(s.scalars(select(Record).where(Record.kind == "memory")))
+        assert len(facts) == 1
+        assert env[2].open(facts[0].data["cipher"])["text"] == "喜欢盆栽"
+
+
 async def test_summary_route_used_for_long_context(env):
     epoch, version = activate(env)
     class LongForum(GoodForum):

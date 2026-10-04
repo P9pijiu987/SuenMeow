@@ -158,6 +158,36 @@ async def test_forum_instruction_cannot_grant_sends_or_change_target(env):
 
 
 @pytest.mark.asyncio
+async def test_agent_prompt_draft_requires_publication_and_keeps_snapshot(env, client):
+    from suenmeow.prompts import replacement_for
+    assert replacement_for("Meow.md") is None
+    assert replacement_for("renamed role", original_file="prompts/TsundereCatgirlMaid_chs_suen.md") is None
+    assert replacement_for("custom persona", persona=True) is None
+    login(client)
+    with env[1].transaction() as s:
+        publish(s, env[3]["admin"], "before editor changes")
+    before = client.get("/api/config").json()["control"]["active_snapshot"]
+    original = client.get(f"/api/config/versions/{before}").json()
+    module = next(r for r in client.get("/api/records/module").json() if r["title"] == "主动研究")
+    module["data"]["content"] = "PUBLISHED_AGENT_GUIDE_FIXTURE"
+    assert client.put("/api/records/module/" + module["id"], json={k: module[k] for k in ["title", "data", "version", "grants"]}).status_code == 200
+    assert client.get(f"/api/config/versions/{before}").json() == original
+    client.post("/api/config/publish", json={"note": "new agent guide"})
+    db, vault, _, tid = prepare(env)
+    model = Model([{"role": "assistant", "content": "完成研究。"}])
+    await AgentEngine(db, vault, Forum(), model, tid).run()
+    assert "PUBLISHED_AGENT_GUIDE_FIXTURE" in model.messages[0]["content"]
+    assert client.get(f"/api/config/versions/{before}").json() == original
+    old_pipeline = {k: v for k, v in original["pipeline"].items() if k != "agent"}
+    assert client.put("/api/config/pipeline", json=old_pipeline).status_code == 200
+    client.post("/api/config/publish", json={"note": "older four-route format"})
+    db, vault, _, tid = prepare(env)
+    fallback = Model([{"role": "assistant", "content": "兼容旧快照。"}])
+    await AgentEngine(db, vault, Forum(), fallback, tid).run()
+    assert "主动研究与管理员任务" in fallback.messages[0]["content"]
+
+
+@pytest.mark.asyncio
 async def test_long_draft_edit_revoke_approval_and_send_once(env, client):
     db, vault, _, tid = prepare(env, kind="reply", target_topic=100, max_chars=4000)
     text = "介绍 SuenMeow 的长回复。" * 200

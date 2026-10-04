@@ -245,8 +245,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
 
     @app.put("/api/config/pipeline")
     def pipeline(body: dict[str, list[str]], account=Depends(admin)):
-        if set(body) != set(ROUTES) or any(len(v) > 40 for v in body.values()):
-            raise HTTPException(422, "需要四条路由，每条最多 40 个模块")
+        if not set(ROUTES) <= set(body) or set(body) - {*ROUTES, "agent"} or any(len(v) > 40 for v in body.values()):
+            raise HTTPException(422, "需要四条工作路由，可选 Agent 提示词编排；每条最多 40 个模块")
         with db.transaction() as s:
             modules = set(s.scalars(select(Record.id).where(Record.kind == "module")))
             if any(x not in modules for v in body.values() for x in v):

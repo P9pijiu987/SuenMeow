@@ -273,7 +273,7 @@ class Worker:
             if meta["source"] == "followup" and (not isinstance(plan.get("reason"), str) or not plan["reason"].strip()):
                 return self.skip(eid, "没有明确的未完话题跟进理由")
             reply = await self.models.complete("replyer", [{"role": "system", "content": system_prompt(snapshot, "replyer") +
-                '\n当前协议：只输出可直接发布的完整回复正文。不要返回 JSON、规划字段、工具指令或隐藏思维链；保持已选人格与语气。'},
+                '\n当前协议：只输出可直接发布的完整回复正文。不要返回包装正文的协议 JSON、规划字段、工具指令或隐藏思维链；正文可包含用户需要的代码或 JSON 示例。保持已选人格与语气。'},
                                           {"role": "user", "content": raw}], topic_id, p)
             if len(reply) > p.max_reply_chars:
                 return self.skip(eid, "模型回复超过长度限制")
@@ -463,9 +463,9 @@ class Worker:
             private = topic.get("archetype") == "private_message" or (hasattr(self.forum, "public_visible") and not await self.forum.public_visible(topic))
             posts = topic["context"]
             result = json_output(await self.models.complete("memory", [{"role": "system", "content": system_prompt(snapshot, "memory") +
-                                         '\n仅提取明确表达的用户事实。返回 {"facts": [{"username": "用户名", "text": "事实"}]}。'},
-                               {"role": "user", "content": json.dumps(compact_posts(posts), ensure_ascii=False)}], topic_id, p))
-            usernames = {x["username"] for x in posts}
+                                         '\n仅提取明确表达的真实用户事实，排除 bot_username。返回 {"facts": [{"username": "用户名", "text": "事实", "source_post_id": 123}]}。'},
+                               {"role": "user", "content": json.dumps({"bot_username": self.forum.connection["username"], "posts": compact_posts(posts)}, ensure_ascii=False)}], topic_id, p))
+            usernames = {x["username"] for x in posts if x["username"].casefold() != self.forum.connection["username"].casefold()}
             with self.db.transaction() as s:
                 admins = s.scalar(select(Account).where(Account.role == "admin", Account.active.is_(True)))
                 existing_facts = list(s.scalars(select(Record).where(Record.kind == "memory").order_by(Record.updated.desc()).limit(500)))
@@ -476,7 +476,9 @@ class Worker:
                     owner = s.scalar(select(Account).where(Account.forum_username == name)) or admins
                     if not owner:
                         continue
-                    source = next((x["id"] for x in reversed(posts) if x["username"] == name), post_id)
+                    source = fact.get("source_post_id", next((x["id"] for x in reversed(posts) if x["username"] == name), post_id))
+                    if type(source) is not int or not any(x["id"] == source and x["username"] == name for x in posts):
+                        continue
                     data = {"text": content, "username": name, "scope": "private" if private else "public",
                             "topic_id": topic_id, "source_post_id": source, "origin": "automatic_fact"}
                     duplicate = next((r for r in existing_facts if r.owner == owner.id and

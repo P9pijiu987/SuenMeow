@@ -67,3 +67,5 @@ docker compose up -d api worker gateway
 - [MacBook 迁移和回滚](docs/MIGRATION.md)
 
 旧版代码不属于本实现。旧版 prompts 与连接由离线导入器读取；旧事件、待发队列和记忆不导入。导入后 prompts 保留为草稿，管理员确认发布后才生效。
+
+本次首帖前的工作提示词更新见 [系统工作提示词](docs/SYSTEM_PROMPTS.md)。GUI 路由编排包含可选的“主动研究工作规则”，发布后用于 Agent；空编排或旧快照使用内置有界任务规则。人格内容独立保留，工作模块不修改人格。
