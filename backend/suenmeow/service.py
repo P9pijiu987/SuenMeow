@@ -37,6 +37,8 @@ def seed(db, admin_id: str):
 
 
 def publish(s, actor: str, note: str, source: dict | None = None):
+    locked(s, "editor_lock")
+    locked(s, "pipeline")
     control = locked(s, "control")
     if source is None:
         policy = Policy.model_validate(s.get(KV, "policy").data).model_dump()

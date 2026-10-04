@@ -45,3 +45,15 @@ docker compose exec -T database dropdb -U suenmeow suenmeow_restore_check_exampl
 ```
 
 核验工具仅连接隔离库，只输出计数和通过状态，不输出解密内容。最后一条命令仅清理本次创建的演练库；失败时先检查诊断，保留原备份。
+
+## 注册与工作区升级
+
+保留 `v2-before-workspace-20261004.dump` 与 `v2-code-before-workspace-20261004.tar.gz`，位于上述受限备份目录，权限均为 0600。此次只有 settings 新增注册策略和锁记录，不改变既有账户权限、prompts、编排或发布快照。升级全程保持暂停或只读，显式执行 `Database(Settings.env().database_url).migrate()` 后重建 API/worker/gateway；既有模式继续只读，worker 重启后重新建立水位。
+
+公开注册默认开启，符合已确认的立即可用/受限编辑者策略；可在账户页关闭。不要把原有管理账户改成注册用户，也不要允许新用户自填论坛身份。
+
+当前公开入口经过 Cloudflare Tunnel，网关仅绑定宿主机回环地址。Nginx 从 Cloudflare 的 [`CF-Connecting-IP`](https://developers.cloudflare.com/fundamentals/reference/http-headers/#cf-connecting-ip) 生成并覆盖内部地址头；API 只接受 `TRUSTED_PROXY_HOST=gateway` 解析出的真实 TCP 对端，校验单一 IPv4/IPv6 地址，不信任外部 `X-Forwarded-For`。禁用 Uvicorn 自动代理头处理，API 错误尾斜线返回 404、网关重定向保持相对路径，避免错误 HTTP 重定向。直连/无头/DNS 失败回退为对端共享限速。切换代理供应商或公开绑定网关时，须同时调整并验证这一信任边界。
+
+`tools/check_proxy.py` 在公开只读环境执行两次随机不存在账户的失败登录，核验伪造转发头被覆盖、两个请求落入同一真实来访地址桶，且不再使用网关共享桶。只输出布尔值，不输出原始 IP；不会重置其他人的限速计数。
+
+`tools/check_workspace.py --prepare --fixture-file /probe/fixture.json` 创建一个受限账户和两个专用模块；省略阶段参数检查 HTTP 权限、CSRF 和冲突；`--cleanup` 核对原模块/编排/发布版本，再移除模块并禁用测试账户。须在暂停/只读环境运行，挂载临时清单目录与 `/run/secrets/probe_admin_password`，或用 `--admin-password-file` 指定忽略的本地密码文件。清单包含临时密码，保持 0600 并禁止提交；这些检查不调用模型或论坛发送。

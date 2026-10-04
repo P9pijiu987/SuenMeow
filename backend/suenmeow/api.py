@@ -11,10 +11,11 @@ from sqlalchemy import delete, select
 
 from .database import Account, Audit, Database, Event, KV, LoginSession, Record, Reply, Snapshot, Usage, audit, locked, now
 from .domain import ForumConnection, ModeInput, ModuleData, NestData, Policy, RecordInput, Route, Strict
-from .security import DUMMY_HASH, Vault, digest, enforce_record, can_edit, password_hash, require_admin, same_token, verify_password
+from .security import DUMMY_HASH, Vault, client_address, digest, enforce_record, can_edit, password_hash, require_admin, same_token, verify_password
 from .service import ROUTES, dashboard, publish, set_mode
 from .settings import Settings
 from .agent_api import mount_agent_api
+from .workspace_api import mount_workspace_api, check_module_quota, unique_username, visible_records
 
 
 class LoginInput(Strict):
@@ -65,7 +66,7 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
         yield
 
     app = FastAPI(title="SuenMeow", version="2.0.0", lifespan=lifespan,
-                  docs_url=None, redoc_url=None, openapi_url=None)
+                  docs_url=None, redoc_url=None, openapi_url=None, redirect_slashes=False)
     app.state.db, app.state.vault = db, vault
 
     @app.exception_handler(RequestValidationError)
@@ -75,7 +76,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
 
     @app.middleware("http")
     async def headers(request: Request, call_next):
-        if request.headers.get("content-length", "0").isdigit() and int(request.headers.get("content-length", 0)) > 262144:
+        limit = 2097152 if request.url.path == "/api/prompts/workspace/save" else 262144
+        if request.headers.get("content-length", "0").isdigit() and int(request.headers.get("content-length", 0)) > limit:
             return JSONResponse({"detail": "请求过大"}, status_code=413)
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             origin = request.headers.get("origin")
@@ -119,7 +121,7 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
 
     @app.post("/api/auth/login")
     def login(body: LoginInput, request: Request, response: Response):
-        address = request.client.host if request.client else "unknown"
+        address = client_address(request, settings)
         keys = ["login:" + digest(address)[:32], "account:" + digest(body.username.casefold())[:32]]
         with db.transaction() as s:
             for key in keys:
@@ -251,7 +253,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
             modules = set(s.scalars(select(Record.id).where(Record.kind == "module")))
             if any(x not in modules for v in body.values() for x in v):
                 raise HTTPException(422, "模块不存在")
-            s.get(KV, "pipeline").data = body
+            row = locked(s, "pipeline")
+            row.data, row.version = body, row.version + 1
             audit(s, account.id, "pipeline_draft_saved")
         return {"ok": True}
 
@@ -277,11 +280,13 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     @app.post("/api/config/versions/{version}/restore")
     def restore(version: int, account=Depends(admin)):
         with db.transaction() as s:
+            locked(s, "editor_lock")
             v = s.get(Snapshot, version)
             if not v:
                 raise HTTPException(404, "版本不存在")
             s.get(KV, "policy").data = v.data["policy"]
-            s.get(KV, "pipeline").data = v.data["pipeline"]
+            pipeline = locked(s, "pipeline")
+            pipeline.data, pipeline.version = v.data["pipeline"], pipeline.version + 1
             for mid, data in v.data["modules"].items():
                 r = s.get(Record, mid)
                 if not r:
@@ -336,7 +341,7 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
         if kind not in ("module", "memory", "nest"):
             raise HTTPException(404, "类型不存在")
         with db.transaction() as s:
-            rows = s.scalars(select(Record).where(Record.kind == kind).order_by(Record.updated.desc()).limit(500))
+            rows = s.scalars(visible_records(account, kind).limit(500))
             return [record_dict(r) for r in rows if can_edit(account, r)]
 
     def validated_data(kind, data, account):
@@ -369,6 +374,9 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
             require_admin(account)
         data = validated_data(kind, body.data, account)
         with db.transaction() as s:
+            if kind == "module":
+                locked(s, "editor_lock")
+                check_module_quota(s, account)
             r = Record(kind=kind, owner=account.id, title=body.title, data=data, grants=body.grants)
             s.add(r)
             s.flush()
@@ -378,6 +386,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     @app.put("/api/records/{kind}/{record_id}")
     def edit_record(kind: str, record_id: str, body: RecordInput, account=Depends(user)):
         with db.transaction() as s:
+            if kind == "module":
+                locked(s, "editor_lock")
             r = s.scalar(select(Record).where(Record.id == record_id, Record.kind == kind).with_for_update())
             if not r:
                 raise HTTPException(404, "内容不存在")
@@ -394,6 +404,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     @app.delete("/api/records/{kind}/{record_id}")
     def remove_record(kind: str, record_id: str, account=Depends(user)):
         with db.transaction() as s:
+            if kind == "module":
+                locked(s, "editor_lock")
             r = s.get(Record, record_id)
             if not r or r.kind != kind:
                 raise HTTPException(404, "内容不存在")
@@ -414,8 +426,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     def create_account(body: AccountInput, account=Depends(admin)):
         encoded = password_hash(body.password)
         with db.transaction() as s:
-            if s.scalar(select(Account).where(Account.username == body.username)):
-                raise HTTPException(409, "用户名已存在")
+            locked(s, "registration_lock")
+            unique_username(s, body.username)
             if body.forum_username and s.scalar(select(Account).where(Account.forum_username == body.forum_username)):
                 raise HTTPException(409, "论坛身份已绑定")
             a = Account(username=body.username, password_hash=encoded, role=body.role,
@@ -428,14 +440,13 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     @app.put("/api/accounts/{account_id}")
     def update_account(account_id: str, body: AccountInput, account=Depends(admin)):
         with db.transaction() as s:
+            locked(s, "registration_lock")
             a = s.get(Account, account_id)
             if not a:
                 raise HTTPException(404, "用户不存在")
             if account.id == a.id and (not body.active or body.role != "admin"):
                 raise HTTPException(409, "不能禁用或降级当前管理员")
-            duplicate = s.scalar(select(Account).where(Account.username == body.username, Account.id != account_id))
-            if duplicate:
-                raise HTTPException(409, "用户名已存在")
+            unique_username(s, body.username, account_id)
             if body.forum_username and s.scalar(select(Account).where(Account.forum_username == body.forum_username, Account.id != account_id)):
                 raise HTTPException(409, "论坛身份已绑定")
             a.username, a.role, a.active, a.forum_username = body.username, body.role, body.active, body.forum_username
@@ -512,4 +523,5 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
                     for u in s.scalars(select(Usage).order_by(Usage.created.desc()).limit(200))]
 
     mount_agent_api(app, db, vault, admin)
+    mount_workspace_api(app, db, settings, user, admin)
     return app

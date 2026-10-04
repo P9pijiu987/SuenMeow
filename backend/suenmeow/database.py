@@ -227,6 +227,7 @@ class Database:
                 "worker": {"status": "stopped", "heartbeat": 0},
                 "policy": {}, "routes": {}, "pipeline": {},
                 "agent_policy": {}, "agent_lock": {},
+                "registration": {"enabled": True}, "registration_lock": {}, "editor_lock": {},
             }.items():
                 if not s.get(KV, key):
                     s.add(KV(key=key, data=data))

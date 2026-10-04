@@ -10,6 +10,7 @@ class Settings:
     origin: str
     secure_cookie: bool
     session_hours: int = 12
+    trusted_proxy_host: str = ""
 
     @classmethod
     def env(cls):
@@ -19,4 +20,5 @@ class Settings:
             Path(os.getenv("ENCRYPTION_KEY_FILE", "secrets/encryption.key")),
             origin,
             origin.startswith("https://"),
+            trusted_proxy_host=os.getenv("TRUSTED_PROXY_HOST", ""),
         )

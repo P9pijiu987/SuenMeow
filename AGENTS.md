@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-SuenMeow 2 is an independent rewrite of a Discourse companion. Consult `docs/SPECIFICATION.md` for agreed behavior, `docs/AGENTIC.md` for the Agent roadmap, and `docs/ACCEPTANCE.md` for verification; legacy upstream is a behavioral reference only.
+SuenMeow 2 independently rewrites a Discourse companion. Consult `docs/SPECIFICATION.md` for agreed behavior, `docs/AGENTIC.md` for the Agent roadmap, and `docs/ACCEPTANCE.md` for verification; legacy is a behavioral reference only.
 
 ## Project Structure & Module Organization
 
@@ -36,9 +36,11 @@ Use four-space Python indentation, type hints, `snake_case` functions/modules, a
 
 Name pytest files `test_*.py` and functions `test_*`; use pytest-asyncio for asynchronous cases. Use fake clients and isolated databases. Tests must never post to live forums. Verify authorization, CSRF, immutable publications, concurrent budget reservations, backlog baselines, cooldowns, uncertain sends, and private-memory boundaries. No numeric coverage threshold is configured.
 
+Cover restricted registration, grant revocation, quotas, and atomic conflicts. `tools/check_workspace.py` probes isolated drafts; ignore its credentials and clean up fixtures.
+
 ## Commit & Pull Request Guidelines
 
-Legacy history uses short English/Chinese subjects, without enforced Conventional Commits. Prefer descriptive imperative subjects. Explain behavior changes, validation, migrations, and deployment impact; link relevant issues and include GUI screenshots. Redact credentials and private conversations.
+Use descriptive imperative subjects; legacy history has no enforced Conventional Commits. Describe behavior changes, validation, migrations, and deployment impact; link issues and include GUI screenshots. Redact credentials and private conversations.
 
 ## Security & Agent Instructions
 

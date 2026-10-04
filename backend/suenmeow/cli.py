@@ -133,7 +133,7 @@ def main():
         initialize(settings, args.username, args.password_file)
     elif args.command == "api":
         from .api import create_app
-        uvicorn.run(create_app(settings), host="0.0.0.0", port=8000, proxy_headers=True)
+        uvicorn.run(create_app(settings), host="0.0.0.0", port=8000, proxy_headers=False)
     elif args.command == "worker":
         from .worker import serve_worker
         asyncio.run(serve_worker(settings))

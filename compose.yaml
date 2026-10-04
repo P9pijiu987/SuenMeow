@@ -9,6 +9,7 @@ x-backend: &backend
     DATABASE_URL: ${DATABASE_URL:?Generate .env using tools/prepare_deploy.py}
     PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-https://suenmeow.p9pijiu.com}
     ENCRYPTION_KEY_FILE: /run/secrets/encryption_key
+    TRUSTED_PROXY_HOST: gateway
   secrets:
     - encryption_key
   depends_on:

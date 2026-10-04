@@ -80,7 +80,7 @@ def test_publish_immutable_and_restore(client, env):
     assert client.get("/api/config").json()["policy"]["global_cooldown"] == original["policy"]["global_cooldown"]
 
 
-def test_no_open_registration_and_rate_limit(client):
+def test_unknown_registration_path_and_login_rate_limit(client):
     assert client.post("/api/register", json={}).status_code == 404
     for i in range(10):
         assert client.post("/api/auth/login", json={"username": "admin", "password": "bad"}).status_code == 401

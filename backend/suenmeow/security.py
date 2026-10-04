@@ -1,16 +1,19 @@
 import hashlib
 import hmac
 import json
+from ipaddress import ip_address
 from pathlib import Path
 import secrets
+import socket
 from threading import BoundedSemaphore
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 from cryptography.fernet import Fernet
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from .database import Record
+from .settings import Settings
 
 HASHER = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2)
 DUMMY_HASH = HASHER.hash(secrets.token_urlsafe(32))
@@ -34,6 +37,20 @@ def verify_password(encoded: str, password: str) -> bool:
 
 def digest(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def client_address(request: Request, settings: Settings) -> str:
+    """Accept a single sanitized address only from the configured gateway TCP peer."""
+    peer = request.client.host if request.client else "unknown"
+    header = request.headers.get("x-suenmeow-client-ip", "")
+    if not settings.trusted_proxy_host or not header or len(header) > 45 or "%" in header:
+        return peer
+    try:
+        address = ip_address(header).compressed
+        proxies = {entry[4][0] for entry in socket.getaddrinfo(settings.trusted_proxy_host, None)}
+        return address if peer in proxies else peer
+    except (ValueError, OSError):
+        return peer  # DNS/header failure keeps a bounded shared peer bucket, never an untrusted identity.
 
 
 class Vault:
