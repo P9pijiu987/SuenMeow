@@ -9,13 +9,15 @@ from pydantic import Field, ValidationError
 import pyotp
 from sqlalchemy import delete, select
 
-from .database import Account, Audit, Database, Event, KV, LoginSession, Record, Reply, Snapshot, Usage, audit, locked, now
+from .database import Account, Audit, Database, Event, ForumIdentity, KV, LoginSession, Record, Reply, Snapshot, Usage, audit, locked, now
 from .domain import ForumConnection, ModeInput, ModuleData, NestData, Policy, RecordInput, Route, Strict
 from .security import DUMMY_HASH, Vault, client_address, digest, enforce_record, can_edit, password_hash, require_admin, same_token, verify_password
 from .service import ROUTES, dashboard, publish, set_mode
 from .settings import Settings
 from .agent_api import mount_agent_api
 from .workspace_api import mount_workspace_api, check_module_quota, unique_username, visible_records
+from .forum_auth import identity_view, mount_forum_auth
+from .memory_import import mount_memory_import
 
 
 class LoginInput(Strict):
@@ -156,7 +158,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
                 for key in keys:
                     entry = locked(s, key)
                     entry.data = {**entry.data, "count": 0 if key.startswith("account:") else max(0, entry.data["count"] - 1)}
-                result = {"id": account.id, "username": account.username, "role": account.role, "csrf": csrf}
+                result = {"id": account.id, "username": account.username, "role": account.role, "csrf": csrf,
+                          **identity_view(s, account)}
         if result is None:
             raise HTTPException(401, "登录信息或验证码错误")
         response.set_cookie("sm_session", token, httponly=True, secure=settings.secure_cookie,
@@ -165,8 +168,10 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
 
     @app.get("/api/auth/me")
     def me(request: Request, account=Depends(user)):
-        return {"id": account.id, "username": account.username, "role": account.role,
-                "forum_username": account.forum_username, "totp_enabled": bool(account.totp_cipher), "csrf": request.state.csrf}
+        with db.transaction() as s:
+            return {"id": account.id, "username": account.username, "role": account.role,
+                    "forum_username": account.forum_username, "totp_enabled": bool(account.totp_cipher), "csrf": request.state.csrf,
+                    **identity_view(s, account)}
 
     @app.post("/api/auth/logout")
     def logout(request: Request, response: Response, account=Depends(user)):
@@ -420,7 +425,7 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     def accounts(account=Depends(admin)):
         with db.transaction() as s:
             return [{"id": a.id, "username": a.username, "role": a.role, "active": a.active,
-                     "forum_username": a.forum_username, "totp_enabled": bool(a.totp_cipher)} for a in s.scalars(select(Account))]
+                     "forum_username": a.forum_username, "totp_enabled": bool(a.totp_cipher), **identity_view(s, a)} for a in s.scalars(select(Account))]
 
     @app.post("/api/accounts")
     def create_account(body: AccountInput, account=Depends(admin)):
@@ -444,6 +449,9 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
             a = s.get(Account, account_id)
             if not a:
                 raise HTTPException(404, "用户不存在")
+            identity = s.scalar(select(ForumIdentity).where(ForumIdentity.account_id == a.id))
+            if identity and body.forum_username != identity.profile["username"]:
+                raise HTTPException(422, "已验证的论坛身份不能手动改绑，用户名随再次私信登录同步")
             if account.id == a.id and (not body.active or body.role != "admin"):
                 raise HTTPException(409, "不能禁用或降级当前管理员")
             unique_username(s, body.username, account_id)
@@ -524,4 +532,6 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
 
     mount_agent_api(app, db, vault, admin)
     mount_workspace_api(app, db, settings, user, admin)
+    mount_forum_auth(app, db, vault, settings, user, admin)
+    mount_memory_import(app, db, vault, user)
     return app

@@ -9,7 +9,7 @@ export async function api<T = any>(path: string, method = 'GET', body?: unknown)
   const data = await response.json().catch(() => ({}))
   if (!response.ok) {
     if (response.status === 401 && path !== '/auth/login') window.dispatchEvent(new Event('session-expired'))
-    throw new Error(typeof data.detail === 'string' ? data.detail : '输入格式不正确，请检查字段')
+    throw Object.assign(new Error(typeof data.detail === 'string' ? data.detail : '请求暂时失败，请稍后重试'), { status: response.status })
   }
   return data
 }

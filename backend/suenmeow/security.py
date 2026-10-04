@@ -5,6 +5,7 @@ from ipaddress import ip_address
 from pathlib import Path
 import secrets
 import socket
+import re
 from threading import BoundedSemaphore
 
 from argon2 import PasswordHasher
@@ -18,6 +19,16 @@ from .settings import Settings
 HASHER = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2)
 DUMMY_HASH = HASHER.hash(secrets.token_urlsafe(32))
 HASH_SLOTS = BoundedSemaphore(2)
+LOGIN_CODE = re.compile(r"\bSM-[a-f0-9]{32}\b", re.IGNORECASE)
+
+
+def identity_message(text: str) -> bool:
+    return bool(LOGIN_CODE.search(text)) or (
+        bool(re.search(r"注册|登录|账号|帳號|账户", text)) and bool(re.search(r"密码|密碼|password", text, re.I)))
+
+
+def private_identity_text(text: str) -> str:
+    return "[账户验证消息，已隔离，不用于聊天、研究或记忆]" if identity_message(text) else text
 
 
 def password_hash(password: str) -> str:

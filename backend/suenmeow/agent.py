@@ -243,6 +243,8 @@ class AgentEngine:
         return data
 
     def source(self, topic, post):
+        if post.get("identity_message"):
+            raise ValueError("账户验证消息不能作为研究来源")
         if post.get("id") not in topic.get("post_stream", {}).get("stream", []):
             raise ValueError("来源帖子不属于已读取主题")
         text = post["text"].encode()[:700].decode("utf-8", "ignore")
@@ -331,6 +333,10 @@ class AgentEngine:
                         continue
                     posts = [p for p in topic["context"] if p["id"] == pid] or await self.forum.selected_posts(topic["id"], [pid])
                     if not posts:
+                        continue
+                    if fact.get("origin") == "personal_topic" and (fact.get("site") != self.forum.connection["base_url"] or
+                            not any(p.get("user_id") == fact.get("forum_user_id") and not p.get("has_quotes")
+                                    and fact.get("quote", "") in p["text"] for p in posts)):
                         continue
                     source = self.source(topic, posts[0])
                     self.constraints["memory_ids"] = list(dict.fromkeys([*self.constraints.get("memory_ids", []), row.id]))

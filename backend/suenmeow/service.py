@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 from sqlalchemy import select, func
 
-from .database import Account, AgentDraft, AgentTask, Audit, Event, KV, Record, Reply, Snapshot, Usage, audit, day, locked, now
+from .database import Account, AgentDraft, AgentTask, Audit, Event, KV, MemoryImport, Record, Reply, Snapshot, Usage, audit, day, locked, now
 from .domain import AgentPolicy, Policy
 from .prompts import DEFAULTS
 
@@ -96,6 +96,13 @@ def reserve(db, route: str, topic_id: int, tokens: int, policy: Policy, task_id=
             used = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).where(Usage.task_id == task_id))
             if used + tokens > task_limit:
                 raise BudgetExceeded("Agent 任务预算不足")
+        if route == "memory" and task_id:
+            job = s.get(MemoryImport, task_id)
+            owner = s.get(Account, job.owner) if job else None
+            if owner and owner.role != "admin":
+                personal = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).join(MemoryImport, Usage.task_id == MemoryImport.id).where(MemoryImport.owner == owner.id, Usage.day == day()))
+                if personal + tokens > 20000:
+                    raise BudgetExceeded("本人的每日记忆 token 额度不足")
         u = Usage(day=day(), route=route, topic_id=topic_id, tokens=tokens, reserved=tokens, task_id=task_id)
         s.add(u)
         s.flush()

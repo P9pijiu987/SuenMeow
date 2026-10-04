@@ -1,12 +1,14 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { ChevronRight, Shield } from 'lucide-react'
 import { api, type Data } from './api'
+import { ForumLogin } from './ForumLogin'
 
 export function AuthPage({ onLogin, story }: { onLogin: (user: Data) => void, story: ReactNode }) {
-  const [mode, setMode] = useState('login'), [enabled, setEnabled] = useState<boolean | null>(null)
+  const [mode, setMode] = useState('forum'), [enabled, setEnabled] = useState<boolean | null>(null), [forumEnabled, setForumEnabled] = useState(false)
   const [name, setName] = useState(''), [password, setPassword] = useState(''), [confirm, setConfirm] = useState('')
   const [code, setCode] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false)
   useEffect(() => { void api('/auth/registration').then(data => setEnabled(data.enabled)).catch(() => setEnabled(false)) }, [])
+  useEffect(() => { void api('/auth/forum').then(data => { setForumEnabled(data.enabled); if (!data.enabled) setMode('login') }).catch(() => setMode('login')) }, [])
   const register = mode === 'register'
   const switchMode = (next: string) => { setMode(next); setPassword(''); setConfirm(''); setCode(''); setError('') }
   const submit = async (event: FormEvent) => {
@@ -17,6 +19,7 @@ export function AuthPage({ onLogin, story }: { onLogin: (user: Data) => void, st
     catch (e) { setError((e as Error).message) }
     finally { setBusy(false) }
   }
+  if (mode === 'forum') return <main className="login-page">{story}<ForumLogin onLogin={onLogin} localLogin={() => switchMode('login')}/></main>
   return <main className="login-page">{story}<form className="login-card" onSubmit={submit}>
     <div className="tabs auth-tabs"><button type="button" disabled={busy} className={!register ? 'active' : ''} onClick={() => switchMode('login')}>登录</button>{enabled && <button type="button" disabled={busy} className={register ? 'active' : ''} onClick={() => switchMode('register')}>注册编辑者</button>}</div>
     <span className="badge green"><Shield size={13}/> {register ? '受限编辑者账户' : '私密控制室'}</span>
@@ -30,5 +33,6 @@ export function AuthPage({ onLogin, story }: { onLogin: (user: Data) => void, st
     {error && <p role="alert" className="error">{error}</p>}
     <button className="primary" disabled={busy}>{busy ? '正在验证…' : register ? '注册并进入工作区' : '进入控制室'}<ChevronRight size={16}/></button>
     <small className="muted">{register ? '全局编排、发布、模型连接及论坛身份绑定由管理员管理。' : enabled === false ? '注册暂时关闭，请联系管理员。' : '编辑者的保存只形成草稿，发布由管理员完成。'}</small>
+    {forumEnabled && <button type="button" disabled={busy} onClick={() => switchMode('forum')}>使用论坛私信登录</button>}
   </form></main>
 }

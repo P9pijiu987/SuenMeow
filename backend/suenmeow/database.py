@@ -4,7 +4,7 @@ from pathlib import Path
 import time
 import uuid
 
-from sqlalchemy import JSON, Boolean, Float, Integer, String, Text, create_engine, select, inspect, text
+from sqlalchemy import JSON, Boolean, Float, Integer, String, Text, UniqueConstraint, create_engine, select, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -44,6 +44,30 @@ class LoginSession(Base):
     user_id: Mapped[str] = mapped_column(String(32), index=True)
     csrf: Mapped[str] = mapped_column(String(64))
     expires: Mapped[float] = mapped_column(Float)
+
+
+class ForumIdentity(Base):
+    __tablename__ = "forum_identities"
+    __table_args__ = (UniqueConstraint("site", "user_id"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    account_id: Mapped[str] = mapped_column(String(32), unique=True)
+    site: Mapped[str] = mapped_column(String(500))
+    user_id: Mapped[int] = mapped_column(Integer)
+    profile: Mapped[dict] = mapped_column(JSON)
+    updated: Mapped[float] = mapped_column(Float, default=now)
+
+
+class ForumLogin(Base):
+    __tablename__ = "forum_logins"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    browser_hash: Mapped[str] = mapped_column(String(64))
+    forum_version: Mapped[int] = mapped_column(Integer)
+    created: Mapped[float] = mapped_column(Float, default=now)
+    expires: Mapped[float] = mapped_column(Float)
+    state: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    failures: Mapped[int] = mapped_column(Integer, default=0)
+    profile: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class KV(Base):
@@ -113,6 +137,30 @@ class Usage(Base):
     state: Mapped[str] = mapped_column(String(32), default="reserved")
     created: Mapped[float] = mapped_column(Float, default=now)
     task_id: Mapped[str] = mapped_column(String(32), default="", index=True)
+
+
+class MemoryImport(Base):
+    __tablename__ = "memory_imports"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    owner: Mapped[str] = mapped_column(String(32), index=True)
+    topic_id: Mapped[int] = mapped_column(Integer, index=True)
+    state: Mapped[str] = mapped_column(String(24), default="preview", index=True)
+    created: Mapped[float] = mapped_column(Float, default=now)
+    expires: Mapped[float] = mapped_column(Float)
+    reason: Mapped[str] = mapped_column(String(300), default="")
+    config: Mapped[dict] = mapped_column(JSON)
+    input_cipher: Mapped[str] = mapped_column(Text)
+    result_cipher: Mapped[str] = mapped_column(Text, default="")
+
+
+class MemoryCursor(Base):
+    __tablename__ = "memory_cursors"
+    __table_args__ = (UniqueConstraint("site", "topic_id"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    site: Mapped[str] = mapped_column(String(500))
+    topic_id: Mapped[int] = mapped_column(Integer)
+    user_id: Mapped[int] = mapped_column(Integer)
+    last_post_id: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class AgentSession(Base):
@@ -228,6 +276,10 @@ class Database:
                 "policy": {}, "routes": {}, "pipeline": {},
                 "agent_policy": {}, "agent_lock": {},
                 "registration": {"enabled": True}, "registration_lock": {}, "editor_lock": {},
+                "forum_auth": {"enabled": True, "allow_signup": True}, "forum_auth_lock": {},
+                "identity_schema": {"version": 1},
+                "memory_import_lock": {}, "memory_import_schema": {"version": 1},
+                "memory_detect_cache": {},
             }.items():
                 if not s.get(KV, key):
                     s.add(KV(key=key, data=data))

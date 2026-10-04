@@ -102,3 +102,20 @@ fieldset { padding: 0; margin: 0; border: 0; min-width: 0; }
 .backdrop:has([aria-label="离开前保存修改"]) { z-index: 120; }
 .draft-confirm-layer .backdrop { z-index: 120; }
 .route-module-list { max-height: 360px; overflow: auto; margin-bottom: 12px; }
+.forum-login { display: flex; flex-direction: column; gap: 18px; }
+.forum-login h2, .forum-login p { margin: 0; }
+.forum-login textarea { overflow-wrap: anywhere; font-size: 13px; }
+.forum-login-actions, .forum-login-footer { display: flex; flex-wrap: wrap; gap: 10px; }
+.forum-login-actions .button { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; padding: 11px 14px; border-radius: 10px; }
+.forum-login-footer { margin-top: 6px; padding-top: 18px; border-top: 1px solid var(--line); }
+.account-avatar { position: relative; overflow: hidden; }
+.account-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+.memory-import { margin-bottom: 22px; }
+.memory-import h3 { display: flex; align-items: center; gap: 8px; }
+.import-progress { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.import-facts { display: grid; gap: 12px; margin: 18px 0; }
+.import-fact { display: flex; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; }
+.import-fact input { width: 18px; flex-shrink: 0; align-self: flex-start; }
+.import-fact blockquote { margin: 8px 0; color: var(--muted); font-size: 13px; }
+.import-discovery button { margin: 0 8px 8px 0; text-align: left; }
+@media (max-width: 700px) { .memory-import .field-grid { grid-template-columns: 1fr; } }

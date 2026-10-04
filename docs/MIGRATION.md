@@ -50,7 +50,15 @@ docker compose exec -T database dropdb -U suenmeow suenmeow_restore_check_exampl
 
 保留 `v2-before-workspace-20261004.dump` 与 `v2-code-before-workspace-20261004.tar.gz`，位于上述受限备份目录，权限均为 0600。此次只有 settings 新增注册策略和锁记录，不改变既有账户权限、prompts、编排或发布快照。升级全程保持暂停或只读，显式执行 `Database(Settings.env().database_url).migrate()` 后重建 API/worker/gateway；既有模式继续只读，worker 重启后重新建立水位。
 
-公开注册默认开启，符合已确认的立即可用/受限编辑者策略；可在账户页关闭。不要把原有管理账户改成注册用户，也不要允许新用户自填论坛身份。
+此前公开网页注册默认开启；2026-10-05 改为论坛私信登录后，生产已关闭无身份的网页自由注册。原管理员和旧账户仍可密码登录，不允许新用户自填论坛身份。
+
+## 私信身份与个人贴导入升级
+
+显式运行 init 增量创建 `forum_logins`、`forum_identities`、`memory_imports`、`memory_cursors` 和对应锁/特性版本标记，保留 schema 2、原账户、21 个模块和发布 v3。七个 persona 不改；不通过初始化重新导入旧事件或旧记忆。确认新登录入口正常后关闭兼容网页注册；禁止用生产模拟身份记录冒充普通用户。
+
+升级前归档 `v2-before-memory-import-20261005.dump` 与 `v2-code-before-memory-import-20261005.tar.gz`，保存在原 MacBook 的受限备份目录。重建并依序启动 API/worker/gateway，仍保持只读。worker 重启先使未完成导入失效，不重新扣费；论坛水位重新建立，旧回复不能补发。回滚应同时恢复匹配的代码、数据库和受限密钥备份；新特性表不能被旧代码继续操作。
+
+用户自助版本再次显式 init，新增 `memory_detect_cache`，不改变身份、发布快照或发送模式。保留 `v2-before-selfservice-20261005.dump` 和 `v2-code-before-selfservice-20261005.tar.gz`（0600）。配套上一版代码由已部署个人贴归档叠加两次私信登录修复重建；旧容器镜像 ID 已不能重新打标，因此回滚须从配套源码构建，不依赖旧镜像标签。自助导入仍在只读时可用；只读限制论坛写入，不妨碍用户主动保存本人记忆。
 
 当前公开入口经过 Cloudflare Tunnel，网关仅绑定宿主机回环地址。Nginx 从 Cloudflare 的 [`CF-Connecting-IP`](https://developers.cloudflare.com/fundamentals/reference/http-headers/#cf-connecting-ip) 生成并覆盖内部地址头；API 只接受 `TRUSTED_PROXY_HOST=gateway` 解析出的真实 TCP 对端，校验单一 IPv4/IPv6 地址，不信任外部 `X-Forwarded-For`。禁用 Uvicorn 自动代理头处理，API 错误尾斜线返回 404、网关重定向保持相对路径，避免错误 HTTP 重定向。直连/无头/DNS 失败回退为对端共享限速。切换代理供应商或公开绑定网关时，须同时调整并验证这一信任边界。
 

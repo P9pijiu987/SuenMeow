@@ -2,12 +2,14 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 import json
 import logging
+import re
 from urllib.parse import quote
 
 import httpx
 
 from .domain import Policy
 from .service import reserve, settle
+from .security import private_identity_text
 
 
 class LoginRequired(Exception):
@@ -59,6 +61,15 @@ def plain(html: str) -> str:
     parser = TextExtractor()
     parser.feed(html)
     return "".join(parser.parts).strip()
+
+
+def safe_post(post: dict) -> dict:
+    text = post.get("raw") or plain(post.get("cooked", ""))
+    sanitized = private_identity_text(text)
+    return {"id": post["id"], "number": post.get("post_number", 0), "username": post.get("username", ""),
+            "user_id": post.get("user_id"), "text": sanitized, "created": post.get("created_at"),
+            "has_quotes": "[quote" in text.lower() or any(line.lstrip().startswith(">") for line in text.splitlines()) or "<blockquote" in post.get("cooked", "").lower(),
+            "identity_message": sanitized != text}
 
 
 def timestamp(value) -> float:
@@ -132,6 +143,21 @@ class Discourse:
     async def user_activity(self, username: str):
         return (await self.read("/user_actions.json", {"username": username, "filter": "5", "limit": 20})).get("user_actions", [])
 
+    async def user_topics(self, username: str):
+        try:
+            return (await self.read("/user_actions.json", {"username": username, "filter": "4", "limit": 20})).get("user_actions", [])
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:
+                raise
+        # A hidden activity stream can return 404 while public authored topics remain searchable.
+        # Bind the author filter to the verified profile; do not accept query syntax in usernames.
+        if not re.fullmatch(r"[\w.\-]{1,100}", username):
+            return []
+        result = await self.search(f"@{username} in:first order:latest", 1)
+        topics = {topic["id"]: topic.get("title", "") for topic in result.get("topics", [])}
+        return [{"topic_id": post.get("topic_id"), "title": topics.get(post.get("topic_id"), "")}
+                for post in result.get("posts", [])[:20]]
+
     async def public_visible(self, topic: dict) -> bool:
         if topic.get("archetype") == "private_message":
             return False
@@ -153,6 +179,10 @@ class Discourse:
         if topic_id <= 0:
             raise ValueError("Existing topic ID required")
         data = await self.read(f"/t/{topic_id}.json")
+        details = data.get("details") or {}
+        data["allowed_users"] = details.get("allowed_users", data.get("allowed_users", []))
+        data["allowed_groups"] = details.get("allowed_groups", data.get("allowed_groups", []))
+        data["title"] = private_identity_text(data.get("title", ""))
         stream = data.get("post_stream", {}).get("stream", [])
         ids = list(dict.fromkeys(stream[:1] + stream[-limit:]))
         if ids:
@@ -160,8 +190,7 @@ class Discourse:
             posts = result.get("post_stream", {}).get("posts", [])
         else:
             posts = data.get("post_stream", {}).get("posts", [])
-        data["context"] = [{"id": p["id"], "number": p.get("post_number", 0), "username": p.get("username", ""),
-                            "text": p.get("raw") or plain(p.get("cooked", "")), "created": p.get("created_at")}
+        data["context"] = [safe_post(p)
                            for p in sorted(posts, key=lambda p: p.get("post_number", 0))
                            if p.get("post_type") == 1 and not p.get("hidden") and not p.get("deleted_at")]
         return data
@@ -170,8 +199,7 @@ class Discourse:
         if topic_id <= 0 or not 1 <= len(post_ids) <= 20 or any(i <= 0 for i in post_ids):
             raise ValueError("Invalid post selection")
         data = await self.read(f"/t/{topic_id}/posts.json", [("post_ids[]", i) for i in post_ids])
-        return [{"id": p["id"], "number": p.get("post_number", 0), "username": p.get("username", ""),
-                 "text": p.get("raw") or plain(p.get("cooked", "")), "created": p.get("created_at")}
+        return [safe_post(p)
                 for p in data.get("post_stream", {}).get("posts", []) if p.get("id") in post_ids and p.get("topic_id", topic_id) == topic_id
                 and p.get("post_type") == 1 and not p.get("hidden") and not p.get("deleted_at")]
 
@@ -251,19 +279,21 @@ class Models:
                 logging.getLogger("suenmeow.models").warning("tool request rejected: status=%s fields=%s", exc.response.status_code, categories)
             raise
 
-    async def complete(self, route: str, messages: list, topic_id: int, policy: Policy):
+    async def complete(self, route: str, messages: list, topic_id: int, policy: Policy,
+                       task_id="", task_limit=0, output_limit=None):
         conf = self.routes.get(route)
         if not conf:
             raise RuntimeError(f"Model route {route} not configured")
         # UTF-8 byte count bounds ordinary prompt tokenization more conservatively than chars/4.
-        reservation = len(json.dumps(messages, ensure_ascii=False).encode()) + conf["max_output"] + 512
-        usage_id = reserve(self.db, route, topic_id, reservation, policy)
+        max_output = min(conf["max_output"], output_limit) if output_limit else conf["max_output"]
+        reservation = len(json.dumps(messages, ensure_ascii=False).encode()) + max_output + 512
+        usage_id = reserve(self.db, route, topic_id, reservation, policy, task_id, task_limit)
         actual = None
         try:
             r = await self.client.post(self.endpoint(conf),
                                        headers={"Authorization": "Bearer " + conf["api_key"]},
                                        json={"model": conf["model"], "messages": messages,
-                                             "max_tokens": conf["max_output"], "temperature": conf["temperature"],
+                                             "max_tokens": max_output, "temperature": conf["temperature"],
                                              **({"reasoning_effort": conf["reasoning_effort"]} if conf.get("reasoning_effort", "default") != "default" else {})})
             r.raise_for_status()
             data = r.json()
