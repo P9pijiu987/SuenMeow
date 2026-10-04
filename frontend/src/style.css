@@ -4,8 +4,10 @@
 @media(max-width:1100px){.sidebar{width:205px;padding:26px 14px 15px}.main-shell{margin-left:205px}.topbar{padding:0 24px}.content{padding:28px 24px 0}.field-grid{grid-template-columns:repeat(2,1fr)}.module-grid{grid-template-columns:repeat(2,1fr)}.stat-grid{gap:12px}.stat{padding:18px 16px}.stat strong{font-size:22px}.hero{padding:24px}.hero h2{font-size:28px}.login-page{gap:50px;grid-template-columns:1fr 390px;padding:35px}.publish-panel{flex-wrap:wrap}.publish-panel>div{flex-basis:100%}}
 @media(max-width:760px){.sidebar{display:none;width:240px;box-shadow:20px 0 50px #253d2f24}.sidebar.open{display:flex}.main-shell{margin-left:0}.mobile-menu{display:inline-flex}.topbar{padding:0 15px;height:57px;gap:10px}.topbar>span{margin-right:auto}.topbar>div{gap:6px}.topbar .badge{font-size:8px}.content{padding:24px 17px 0}.page-heading{margin-bottom:21px}.day-label{display:none}.page-heading small{font-size:8px}h1{font-size:26px}.hero{padding:22px;min-height:230px;position:relative}.hero>div{z-index:1;max-width:100%}.hero h2{font-size:27px}.hero .cat-art{position:absolute;right:-25px;bottom:15px;width:200px;max-width:none;opacity:.19}.hero p{font-size:11px;max-width:85%}.hero-meta{font-size:9px;flex-wrap:wrap}.stat-grid{grid-template-columns:1fr 1fr;gap:10px}.stat:first-child{grid-column:1/-1}.stat{padding:18px}.stat strong{font-size:21px}.stat>small{font-size:9px}.panel{padding:19px}.mode-grid{grid-template-columns:repeat(2,1fr)}.mode-option{padding:15px 8px}.info-note{padding:15px}.info-note p{font-size:10px}.module-grid,.route-grid{grid-template-columns:1fr}.module-card{min-height:180px}.field-grid{gap:0 12px;grid-template-columns:repeat(2,minmax(0,1fr))}.field{margin:13px 0 17px}.field>span{font-size:11px}.field>small{font-size:9px}.toolbar{align-items:start;flex-wrap:wrap}.tabs{gap:1px}.tabs button{font-size:11px;padding:8px 9px}.toolbar>button{margin-left:auto}.publish-panel{gap:17px}.publish-panel>.field{flex-basis:100%}.publish-panel>button{margin-left:auto}.connection-card{flex-wrap:wrap;gap:12px}.connection-card>div:nth-child(2){flex-basis:calc(100% - 68px)}.connection-card>.badge{margin-left:auto}.nest-intro{flex-wrap:wrap;padding:20px;gap:14px}.nest-intro>div{flex-basis:calc(100% - 52px)}.nest-intro>button{margin-left:auto}.nest-intro h2{font-size:16px}.list-row{flex-wrap:wrap;gap:10px}.list-row>.grow{min-width:50%}.backdrop{padding:10px}.modal{padding:20px;max-height:94vh;border-radius:12px}.modal>header{margin-bottom:15px}.toast{bottom:15px;right:15px;left:15px;font-size:12px}.toast>span{flex:1}.login-page{display:block;padding:25px;max-width:440px}.login-story>.cat-art,.login-story>h1,.login-story>p{display:none}.login-story .brand{margin:20px 0 30px}.login-card{padding:27px}.saving-indicator{left:auto;right:20px;top:60px}.pipeline-row{gap:5px;font-size:11px}.pipeline-row .icon-button{padding:5px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
-/* Research sessions remain usable when evidence and drafts move below chat on smaller screens. */
-.agent-layout { display: grid; grid-template-columns: 180px minmax(300px, 1fr) minmax(260px, 340px); gap: 18px; align-items: start; }
+/* Keep the conversation and long draft wide enough to read and edit. */
+.agent-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 18px; align-items: start; }
+.agent-conversation, .agent-evidence { min-width: 0; }
+.agent-evidence { grid-column: 2; display: flex; flex-direction: column; }
 .agent-layout .panel { margin-bottom: 16px; padding: 20px; }
 .agent-sessions { position: sticky; top: 20px; }
 .agent-sessions > button { width: 100%; }
@@ -33,7 +35,9 @@
 .agent-source a { color: #315d4e; text-decoration: underline; font-size: 13px; }
 .agent-source small { display: block; margin-top: 5px; color: #738279; }
 .agent-source p { font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
-.agent-draft textarea { width: 100%; line-height: 1.7; }
+.agent-draft textarea { width: 100%; min-height: 360px; line-height: 1.8; }
+.agent-sources { max-height: 420px; overflow: auto; }
+.agent-steps { max-height: 280px; overflow: auto; }
 .agent-confirm-text { max-height: 50vh; overflow: auto; }
-@media (max-width: 1180px) { .agent-layout { grid-template-columns: 150px minmax(250px, 1fr); } .agent-evidence { grid-column: 2; } }
+@media (max-width: 1180px) { .agent-layout { grid-template-columns: 150px minmax(0, 1fr); } }
 @media (max-width: 700px) { .agent-layout { display: flex; flex-direction: column; } .agent-layout > * { width: 100%; } .agent-sessions { position: static; } .agent-session-list { max-height: 150px; } .agent-compose .field-grid { grid-template-columns: 1fr; } }

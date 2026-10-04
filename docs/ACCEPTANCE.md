@@ -74,7 +74,13 @@
 - `check_pipeline.py` 使用实际发布 prompts 和四路真实模型，但论坛与数据库采用隔离模拟：摘要、规划、正文、记忆全部完成，正文 569 字符且无 JSON 外壳；模拟发送 1 次，记忆完成且产生 1 条有来源事实，真实论坛写入 0，生产事件队列没有改变。
 - 四容器 healthy；公开 HTTPS 健康、登录、Cookie、CSRF、Origin、注销吊销及错误响应不回显凭据再次通过。运行模式 read_only，active_snapshot=3，control epoch 与 baseline_epoch 均为 11，生产事件/回复/记忆仍为 0。
 - GUI 已显示第五条“主动研究工作规则”与新版编排；截图 `screenshots/production-agent-prompts.png`。真实长草稿在生产 GUI 编辑保存后为 1059 字符/草稿 v3，确认发送仍禁用；会话截图保存在忽略的 `runtime/production-long-preview.png`，不将聊天正文提交到仓库。
-- 验收后另保存 `v2-after-prompt-refresh-20261004.dump`（0600、161415 字节），保留最新系统配置和加密任务；此新归档尚未另做恢复演练，历史归档恢复证据见上文。
+- 验收后另保存 `v2-after-prompt-refresh-20261004.dump`（0600、161415 字节），保留系统配置和加密任务；随后在独立 PostgreSQL 库完成恢复演练：发布 v3、21 个模块哈希、7 个 persona 与旧快照一致、6 组连接和 81 条聊天/草稿/来源记录解密成功，事件/回复为 0。演练库已清理，工具与命令见 `MIGRATION.md`。
+
+## 2026-10-04 管理员聊天布局复核
+
+- 将聊天与结果区改为宽正文布局，草稿或研究结论位于来源列表前，来源与工具轨迹各自有滚动上限。过期草稿明确显示“草稿已过期”；工具轨迹区分“开始”和“完成”，避免把历史开始事件当作仍在运行。
+- 本地 TypeScript/Vite 生产构建通过；MacBook 网关重新构建并健康。生产真实既有草稿在 1280px 屏幕的正文宽度为 727px，390px 手机为 314px；两种宽度均没有页面水平溢出。截图保存在忽略的 runtime/production-long-preview-wide.png 和 runtime/production-long-preview-mobile.png。
+- 此轮仅更新 GUI 和恢复工具，后台配置仍为 v3/只读，原 worker 持续运行。首次发送、运行模式及自然事件验收仍等待指定目标与运行选择。
 
 ## 尚需用户输入的交付检查
 

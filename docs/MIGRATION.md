@@ -32,3 +32,16 @@
 2026-10-04，旧备份在独立临时目录恢复，33 个文件逐一校验，SQLite 完整性通过。新版 PostgreSQL 自定义格式备份恢复到独立数据库后，验证了 15 个 prompts、加密论坛凭据和四条模型连接；旧事件、回复、记忆仍为 0。演练库已删除，未启动任何旧发送者。
 
 MacBook 的受限备份目录为 `/Users/zhangyichi/Documents/program/SuenMeow2-backups`。保留 `v2-before-activation-20261004.dump` 和配套 `v2-secrets-20261004.tar.gz`；二者权限为 0600。恢复时先恢复配套密钥和配置，随后导入隔离库验证，再决定是否切换。不要将秘密归档上传仓库。
+
+首帖前系统 prompts 更新另外保留 `v2-before-prompt-refresh-20261004.dump` 和 `v2-after-prompt-refresh-20261004.dump`。后者已在独立库恢复并核验发布 v3、21 个模块哈希、7 个 persona、6 组加密连接以及 81 条加密聊天记录，事件和回复均为 0。演练库已清理，正式服务未切换到演练库。
+
+新版归档的恢复核验命令如下，须在部署目录执行并使用与归档匹配的加密密钥。数据库名必须是未使用的隔离名称，不能覆盖正式 `suenmeow` 库：
+
+```sh
+docker compose exec -T database createdb -U suenmeow suenmeow_restore_check_example </dev/null
+docker compose exec -T database pg_restore -U suenmeow -d suenmeow_restore_check_example < /path/to/backup.dump
+docker compose run --rm -T --interactive=false -v "$PWD/tools:/checks:ro" api python /checks/verify_database_restore.py --database suenmeow_restore_check_example </dev/null
+docker compose exec -T database dropdb -U suenmeow suenmeow_restore_check_example </dev/null
+```
+
+核验工具仅连接隔离库，只输出计数和通过状态，不输出解密内容。最后一条命令仅清理本次创建的演练库；失败时先检查诊断，保留原备份。
