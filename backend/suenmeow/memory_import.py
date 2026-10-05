@@ -76,6 +76,10 @@ def valid_job(s, job):
             raise ValueError("当前用户单次预算不能超过 12,000 token，请重新预览")
     if not connection or connection.version != job.config.get("forum_version") or not model or model.version != job.config.get("model_version"):
         raise ValueError("连接已变化，请重新读取预览")
+    if job.config.get('topic_pipeline'):
+        from .topic_pipeline import pin_valid
+        if not pin_valid(s, job.config['topic_pipeline']):
+            raise ValueError('个人贴编排已变化，请重新导入')
     if "category_version" in job.config:
         settings = s.get(KV, "memory_import_settings")
         if settings.version != job.config["category_version"]:
@@ -329,6 +333,12 @@ def mount_memory_import(app, db, vault, user):
                 topic, first = await verified_topic(forum, topic_id, config.get("category_id"))
                 if bound_user_id and first["user_id"] != bound_user_id:
                     raise ValueError("只能从本人创建的公开主题建立自己的记忆")
+                from .topic_pipeline import verified_pin, overlay
+                pin = verified_pin(db, topic, first, conf['base_url'])
+                if pin:
+                    config['topic_pipeline'] = pin
+                    local_snapshot = overlay(snapshot, pin)
+                    work_prompt = "\n\n".join(local_snapshot['modules'][key]['content'] for key in local_snapshot['pipeline']['memory'])
                 stream = topic["post_stream"]["stream"]
                 with db.transaction() as s:
                     previous = cursor(s, conf["base_url"], topic_id)

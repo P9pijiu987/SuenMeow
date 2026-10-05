@@ -540,6 +540,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
 
     mount_agent_api(app, db, vault, admin)
     mount_workspace_api(app, db, settings, user, admin)
+    from .topic_pipeline import mount_topic_pipelines
+    mount_topic_pipelines(app, db, vault, user, admin)
     mount_forum_auth(app, db, vault, settings, user, admin)
     mount_memory_import(app, db, vault, user)
     return app

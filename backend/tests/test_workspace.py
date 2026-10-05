@@ -32,7 +32,8 @@ def test_registration_immediate_and_restricted(client, env):
     client.headers['x-csrf-token'] = account['csrf']
     assert client.get('/api/auth/me').json()['id'] == account['id']
     workspace = client.get('/api/prompts/workspace').json()
-    assert workspace['modules'] == [] and workspace['pipeline'] is None and 'accounts' not in workspace
+    assert workspace['modules'] and workspace['pipeline'] and 'accounts' not in workspace
+    assert all(not m['editable'] for m in workspace['modules'])
     assert client.get('/api/accounts').status_code == 403
     assert client.get('/api/connections').status_code == 403
     assert client.get('/api/agent/sessions').status_code == 403
@@ -43,7 +44,7 @@ def test_registration_immediate_and_restricted(client, env):
     new = {'id': 'new-a', 'title': 'My module', 'data': {'content': 'Private draft'}, 'version': 1}
     saved = client.post('/api/prompts/workspace/save', json={'modules': [new]})
     assert saved.status_code == 200, saved.text
-    own = saved.json()['modules'][0]
+    own = next(m for m in saved.json()['modules'] if m['owner'] == account['id'])
     assert own['owner'] == account['id']
     assert client.post('/api/prompts/workspace/save', json={'modules': [draft(own, grants=[ids['other']])]}).status_code == 403
     assert client.post('/api/prompts/workspace/save', json={'pipeline': {}, 'pipeline_version': 1}).status_code == 403
@@ -134,8 +135,8 @@ def test_editor_grants_private_boundary_and_own_delete(client, env):
         'modules': [draft(admin_module, grants=[env[3]['editor']])]}).status_code == 200
     login(client, 'editor', 'editor-test-password')
     modules = client.get('/api/prompts/workspace').json()['modules']
-    assert len(modules) == 1
-    granted = modules[0]
+    assert any(m['id'] == admin_module['id'] and m['editable'] for m in modules)
+    granted = next(m for m in modules if m['id'] == admin_module['id'])
     assert client.post('/api/prompts/workspace/save', json={
         'modules': [draft(granted, title='Authorized draft')]}).status_code == 200
     assert client.post('/api/prompts/workspace/save', json={
@@ -146,7 +147,7 @@ def test_editor_grants_private_boundary_and_own_delete(client, env):
     assert client.post('/api/prompts/workspace/save', json={
         'deleted': [{'id': own['id'], 'version': own['version']}]}).status_code == 200
     login(client, 'other', 'another-test-password')
-    assert client.get('/api/prompts/workspace').json()['modules'] == []
+    assert all(not m['editable'] for m in client.get('/api/prompts/workspace').json()['modules'])
     assert client.post('/api/prompts/workspace/save', json={'modules': [draft(granted)]}).status_code == 403
 
 
@@ -154,7 +155,7 @@ def test_own_referenced_delete_rejected_and_snapshot_immutable(client, env):
     login(client, 'editor', 'editor-test-password')
     saved = client.post('/api/prompts/workspace/save', json={
         'modules': [{'id': 'new-own', 'title': 'Owned', 'data': {'content': 'Original'}}]}).json()
-    own = saved['modules'][0]
+    own = next(m for m in saved['modules'] if m['owner'] == env[3]['editor'])
     login(client)
     base = client.get('/api/prompts/workspace').json()
     pipeline = deepcopy(base['pipeline']); pipeline['replyer'].append(own['id'])
@@ -194,7 +195,7 @@ def test_multiple_grants_scope_and_revocation(client, env):
     assert client.post('/api/prompts/workspace/save', json={
         'modules': [draft(updated, grants=[env[3]['editor']])]}).status_code == 200
     login(client, 'other', 'another-test-password')
-    assert client.get('/api/prompts/workspace').json()['modules'] == []
+    assert all(not m['editable'] for m in client.get('/api/prompts/workspace').json()['modules'])
     assert client.post('/api/prompts/workspace/save', json={'modules': [draft(updated)]}).status_code == 403
 
 

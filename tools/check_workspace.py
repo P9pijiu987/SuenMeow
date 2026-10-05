@@ -22,7 +22,7 @@ def login(client, username, password):
 
 
 def signature(workspace):
-    return {m['id']: sha256(json.dumps(m, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    return {m['id']: sha256(json.dumps({k:v for k,v in m.items() if k not in ('editable', 'is_persona', 'legacy_persona')}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
             for m in workspace['modules']}
 
 
@@ -40,7 +40,7 @@ def check(args):
             account = call(editor, 'POST', '/auth/register', {'username': username, 'password': password}, 201)
             assert account['role'] == 'editor' and not account['forum_username']
             editor.headers['x-csrf-token'] = account['csrf']
-            assert call(editor, 'GET', '/prompts/workspace')['modules'] == []
+            assert all(not m['editable'] for m in call(editor, 'GET', '/prompts/workspace')['modules'])
             own = call(editor, 'POST', '/records/module', {'title': '验收 · 编辑者自己的模块',
                        'data': {'content': '以自然的猫咪语气回应；不虚构事实。', 'description': '仅用于注册与编辑验收'}})
             granted = call(admin, 'POST', '/records/module', {'title': '验收 · 授权协作模块',
@@ -78,14 +78,14 @@ def check(args):
             return
         login(editor, fixture['username'], fixture['password'])
         visible = call(editor, 'GET', '/prompts/workspace')
-        assert {m['id'] for m in visible['modules']} == {fixture['own'], fixture['granted']}
-        assert visible['pipeline'] is None and 'accounts' not in visible
+        assert {m['id'] for m in visible['modules'] if m['editable']} == {fixture['own'], fixture['granted']}
+        assert visible['pipeline'] == current['pipeline'] and not visible['pipeline_editable'] and 'accounts' not in visible
         for path in ('/accounts', '/connections', '/config', '/agent/sessions', '/replies'):
             call(editor, 'GET', path, expected=403)
         call(editor, 'POST', '/config/publish', {}, 403)
         call(editor, 'PUT', '/auth/registration', {'enabled': False}, 403)
         call(editor, 'POST', '/prompts/workspace/save', {'pipeline': {}, 'pipeline_version': 1}, 403)
-        module = visible['modules'][0]
+        module = next(m for m in visible['modules'] if m['editable'])
         change = {k: module[k] for k in ('id', 'title', 'data', 'version', 'grants')}
         call(editor, 'POST', '/prompts/workspace/save', {'modules': [{**change, 'grants': [] if module['grants'] else [fixture['id']]}]}, 403)
         change['data'] = {**change['data'], 'description': '真实 HTTPS 受限编辑 API 验收'}

@@ -154,6 +154,9 @@ def send_reason(s, reply: Reply, event: Event, policy: Policy, timestamp: float)
         return "回复不可发送"
     if reply.topic_id <= 0 or reply.topic_id != event.topic_id:
         return "只能回复既有主题"
+    from .topic_pipeline import pin_valid
+    if not pin_valid(s, event.data.get("topic_pipeline")):
+        return "个人贴编排已停用、重新发布或身份变化，旧草稿已过期"
     if event.data.get("agent_task"):
         task = s.get(AgentTask, event.data["agent_task"])
         draft = s.get(AgentDraft, event.data.get("agent_draft", ""))

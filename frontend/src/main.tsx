@@ -5,6 +5,7 @@ import { api, setCsrf, type Data } from './api'
 import './style.css'
 import { AgentChat } from './AgentChat'
 import { PromptWorkspace } from './PromptWorkspace'
+import { TopicPipelines } from './TopicPipelines'
 import { AuthPage } from './AuthPage'
 import { MemoryImport } from './MemoryImport'
 import { DraftContext, SaveDock, useDraftSafety, type DraftHandle } from './DraftSafety'
@@ -17,7 +18,7 @@ const date = (ts: number) => ts ? new Date(ts * 1000).toLocaleString('zh-CN', { 
 const number = (x: number) => (x || 0).toLocaleString('zh-CN')
 const nav = [
   ['overview', '概览', Home, false], ['agent', '与猫交谈', Search, true], ['queue', '回复审核', MessageSquare, true], ['strategy', '回复策略', Settings2, true],
-  ['prompts', '人格与提示词', Sparkles, false], ['models', '连接与模型', KeyRound, true], ['memory', '记忆书架', BookOpen, false],
+  ['prompts', '人格与提示词', Sparkles, false], ['topicPipelines', '个人贴编排', Cat, false], ['models', '连接与模型', KeyRound, true], ['memory', '记忆书架', BookOpen, false],
   ['nests', '猫窝', Coffee, false], ['access', '账户与权限', Users, true], ['logs', '运行记录', Activity, true],
 ] as const
 
@@ -165,7 +166,7 @@ function App() {
   if (loading) return <main className="loading"><Cat/>正在打开猫的控制室…</main>
   if (!user) return <Login onLogin={login}/>
   const available = nav.filter(x => !x[3] || user.role === 'admin')
-  const pages: Data = { overview: Overview, agent: AgentChat, queue: Queue, strategy: Strategy, prompts: PromptWorkspace, models: ModelsPage, memory: Memories, nests: Nests, access: Access, logs: Logs, profile: Profile }
+  const pages: Data = { overview: Overview, agent: AgentChat, queue: Queue, strategy: Strategy, prompts: PromptWorkspace, topicPipelines: TopicPipelines, models: ModelsPage, memory: Memories, nests: Nests, access: Access, logs: Logs, profile: Profile }
   const Component = pages[page] || Overview
   const title = page === 'profile' ? '我的账户' : available.find(x => x[0] === page)?.[1] || '概览'
   return <DraftContext.Provider value={draft}><div className="app-shell"><aside className={menu ? 'sidebar open' : 'sidebar'}><div className="brand"><Cat size={29}/><span>SuenMeow<small>猫的控制室</small></span><Badge>2.0</Badge></div><small className="nav-label">日常照看</small><nav>{available.map(([key, label, Icon]) => <button key={key} className={page === key ? 'active' : ''} onClick={() => key !== page && leave(() => { setPage(key); setMenu(false) })}><Icon size={19}/>{label}{page === key && <span className="nav-dot"/>}</button>)}</nav><div className="sidebar-bottom"><div className="mini-note"><Shield size={16}/><span>有边界，也有一点猫脾气。</span></div><button className="account-switch" onClick={() => page !== 'profile' && leave(() => setPage('profile'))}><span className="account-avatar">{(user.display_name || user.username)[0].toUpperCase()}{user.avatar_url && <img src={user.avatar_url} alt="" onError={e => { e.currentTarget.style.display = 'none' }}/>}</span><span>{user.display_name || user.username}<small>{user.role === 'admin' ? '管理员' : '编辑者'}</small></span><ChevronRight size={15}/></button></div></aside><div className="main-shell"><header className="topbar"><button className="icon-button mobile-menu" aria-label="导航菜单" onClick={() => setMenu(!menu)}><Menu/></button><span>控制室 <ChevronRight size={13}/> <strong>{title}</strong></span><div><Badge tone="green"><Shield size={12}/>已验证会话</Badge><button className="icon-button" aria-label="退出登录" onClick={() => leave(() => { void act(() => api('/auth/logout', 'POST').then(() => { setUser(null); setCsrf('') }), '已退出') })}><LogOut size={18}/></button></div></header><main className="content"><div className="page-heading"><div><small>SUENMEOW / EVERYDAY COMPANION</small><h1>{title}</h1></div><span className="muted day-label">{new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}</span></div><Component key={page} user={user} act={act}/><footer className="page-footer">SuenMeow 2 · 好好回应，慢慢记得。</footer></main></div>{busy && <div className="saving-indicator"><RefreshCw size={14}/>正在保存…</div>}{toast && <div className={'toast ' + (toast.error ? 'error-toast' : '')} role={toast.error ? 'alert' : 'status'}>{toast.error ? <CircleHelp size={18}/> : <Check size={18}/>}<span>{toast.text}</span><button className="icon-button" aria-label="关闭通知" onClick={() => setToast(null)}><X size={15}/></button></div>}{pendingLeave && <Modal title="离开前保存修改" close={() => setPendingLeave(null)}><p>当前页面还有未保存的修改。保存为草稿后再离开，或继续编辑。</p><div className="form-actions"><button onClick={() => setPendingLeave(null)}>继续编辑</button><button disabled={busy} className="danger" onClick={() => { draft.current = null; pendingLeave(); setPendingLeave(null) }}>放弃修改并离开</button><button disabled={busy} className="primary" onClick={async () => { if (await draft.current?.save()) { pendingLeave(); setPendingLeave(null) } }}>保存后离开</button></div></Modal>}</div></DraftContext.Provider>

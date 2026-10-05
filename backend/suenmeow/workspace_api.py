@@ -9,6 +9,7 @@ from .database import Account, KV, LoginSession, Record, audit, locked, now
 from .domain import ModuleData, Strict
 from .security import can_edit, client_address, digest, enforce_record, password_hash, require_admin
 from .service import ROUTES
+from .personas import is_persona, legacy_persona
 
 
 class RegistrationInput(Strict):
@@ -70,10 +71,19 @@ def visible_records(account, kind):
 
 def mount_workspace_api(app, db, settings, user, admin):
     def view(s, account):
-        modules = [dict(id=r.id, owner=r.owner, title=r.title, data=r.data,
-                        grants=r.grants, version=r.version, updated=r.updated)
-                   for r in s.scalars(visible_records(account, "module")) if can_edit(account, r)]
-        result = {"modules": modules, "pipeline": None, "pipeline_version": None}
+        pipeline = s.get(KV, "pipeline")
+        referenced = {mid for ids in pipeline.data.values() for mid in ids}
+        editable = set(s.scalars(visible_records(account, "module").with_only_columns(Record.id)))
+        modules = []
+        for r in s.scalars(select(Record).where(Record.kind == "module").order_by(Record.updated.desc(), Record.id)):
+            if account.role == "admin" or r.id in editable or is_persona(s, r) or r.id in referenced:
+                writable = can_edit(account, r)
+                modules.append(dict(id=r.id, owner=r.owner if writable else "", title=r.title, data=r.data,
+                                    grants=r.grants if writable else [], version=r.version, updated=r.updated, editable=writable,
+                                    is_persona=is_persona(s, r), legacy_persona=legacy_persona(s, r.id, r.title)))
+        result = {"modules": modules, "pipeline": {**pipeline.data, "agent": pipeline.data.get("agent", [])},
+                  "pipeline_version": pipeline.version, "pipeline_editable": account.role == "admin",
+                  "active_snapshot": s.get(KV, "control").data["active_snapshot"]}
         if account.role == "admin":
             pipeline = s.get(KV, "pipeline")
             result.update(pipeline={**pipeline.data, "agent": pipeline.data.get("agent", [])},

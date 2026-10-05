@@ -38,6 +38,26 @@ class Account(Base):
     forum_username: Mapped[str] = mapped_column(String(100), default="")
 
 
+class TopicPipeline(Base):
+    __tablename__ = "topic_pipelines"
+    __table_args__ = (UniqueConstraint("site", "topic_id"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    owner: Mapped[str] = mapped_column(String(32), index=True)
+    site: Mapped[str] = mapped_column(String(500))
+    user_id: Mapped[int] = mapped_column(Integer)
+    topic_id: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(200))
+    personas: Mapped[dict] = mapped_column(JSON)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    published_version: Mapped[int] = mapped_column(Integer, default=0)
+    generation: Mapped[int] = mapped_column(Integer, default=0)
+    published: Mapped[dict] = mapped_column(JSON, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    forum_version: Mapped[int] = mapped_column(Integer)
+    category_version: Mapped[int] = mapped_column(Integer)
+    updated: Mapped[float] = mapped_column(Float, default=now)
+
+
 class LoginSession(Base):
     __tablename__ = "sessions"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -281,7 +301,7 @@ class Database:
                 "memory_import_lock": {}, "memory_import_schema": {"version": 1},
                 "memory_detect_cache": {},
                 "memory_import_settings": {"category_id": 22},
-                "memory_full_coverage": {}, "memory_tombstones": {},
+                "memory_full_coverage": {}, "memory_tombstones": {}, "topic_pipeline_lock": {},
             }.items():
                 if not s.get(KV, key):
                     s.add(KV(key=key, data=data))

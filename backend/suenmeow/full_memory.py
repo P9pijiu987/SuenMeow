@@ -51,6 +51,8 @@ async def process_full_import(db, vault, models, job_id, connection, policy, for
         conf, topic_id = dict(job.config), job.topic_id
         plan = vault.open(job.input_cipher)
         snapshot = s.get(Snapshot, conf["snapshot_id"]).data
+        from .topic_pipeline import overlay
+        snapshot = overlay(snapshot, conf.get('topic_pipeline'))
         work = "\n\n".join(snapshot["modules"][key]["content"] for key in snapshot["pipeline"]["memory"])
     forum = forum_factory(connection)
 

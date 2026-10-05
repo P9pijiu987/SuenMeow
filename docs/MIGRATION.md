@@ -87,3 +87,9 @@ docker compose exec -T database dropdb -U suenmeow suenmeow_restore_check_exampl
 升级前归档 `v2-before-full-memory-20261005.dump` 与 `v2-code-before-full-memory-20261005.tar.gz`（0600），源码从上一版配套归档复制。依序 init、重建 API/worker/gateway，保留只读、发布v3、21个模块和七个人格。旧失败任务与原收费记录不重跑、不清空。新增删除来源指纹不能追溯恢复升级前已经删除的来源信息。
 
 部署后匹配归档为 `v2-after-full-memory-20261005.dump` 与 `v2-code-after-full-memory-20261005.tar.gz`，均0600、受限目录0700。数据库归档254,381字节，`pg_restore --list` 通过；此轮不宣称新归档完成完整恢复演练。源码归档排除依赖、缓存、secrets 与 runtime。
+
+## 个人贴编排升级（2026-10-05）
+
+显式 init 新增 `topic_pipelines` 表和 `topic_pipeline_lock`，schema 2、账号身份、原模块、发布v3和只读模式保持。备份 `v2-before-topic-pipelines-20261005.dump` 及 `v2-code-before-topic-pipelines-20261005.tar.gz`（0600）；配套源码从上一版完整历史研究归档复制。切换前确认没有进行中的记忆导入，再更新 API/worker/gateway，重启仍建立新水位、跳过积压。个人编排草稿不启用发送，回滚同时恢复匹配代码与数据库。
+
+部署后配套归档为 `v2-after-topic-pipelines-20261005.dump` 和 `v2-code-after-topic-pipelines-20261005.tar.gz`（0600、受限目录0700）；数据库归档272,199字节，`pg_restore --list`可读。源代码排除secrets、runtime、依赖与缓存。临时HTTPS权限验收账户已停用；系统继续read_only，没有替真实用户创建或发布个人编排。
