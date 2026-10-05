@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from urllib.parse import quote
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -14,6 +15,18 @@ from .security import private_identity_text
 
 class LoginRequired(Exception):
     pass
+
+
+class ModelOutputError(RuntimeError):
+    """Fixed failure codes and usage counts, never provider content or reasoning text."""
+    def __init__(self, code: str, usage: dict):
+        super().__init__("Model output " + code)
+        self.code = code
+        self.metrics = {key: usage[key] for key in ("prompt_tokens", "completion_tokens")
+                        if type(usage.get(key)) is int and usage[key] >= 0}
+        details = usage.get("completion_tokens_details")
+        if isinstance(details, dict) and type(details.get("reasoning_tokens")) is int and details["reasoning_tokens"] >= 0:
+            self.metrics["reasoning_tokens"] = details["reasoning_tokens"]
 
 
 class TextExtractor(HTMLParser):
@@ -288,7 +301,7 @@ class Models:
             raise
 
     async def complete(self, route: str, messages: list, topic_id: int, policy: Policy,
-                       task_id="", task_limit=0, output_limit=None):
+                       task_id="", task_limit=0, output_limit=None, compact_json=False):
         conf = self.routes.get(route)
         if not conf:
             raise RuntimeError(f"Model route {route} not configured")
@@ -298,11 +311,14 @@ class Models:
         usage_id = reserve(self.db, route, topic_id, reservation, policy, task_id, task_limit)
         actual = None
         try:
+            # Only the official DeepSeek endpoint supports these provider-specific controls.
+            compact = compact_json and urlsplit(self.endpoint(conf)).hostname == "api.deepseek.com"
             r = await self.client.post(self.endpoint(conf),
                                        headers={"Authorization": "Bearer " + conf["api_key"]},
                                        json={"model": conf["model"], "messages": messages,
                                              "max_tokens": max_output, "temperature": conf["temperature"],
-                                             **({"reasoning_effort": conf["reasoning_effort"]} if conf.get("reasoning_effort", "default") != "default" else {})})
+                                             **({"response_format": {"type": "json_object"}, "thinking": {"type": "disabled"}} if compact else
+                                                {"reasoning_effort": conf["reasoning_effort"]} if conf.get("reasoning_effort", "default") != "default" else {})})
             r.raise_for_status()
             data = r.json()
             u = data.get("usage", {})
@@ -310,10 +326,10 @@ class Models:
                 actual = u["total_tokens"]
             choice = data["choices"][0]
             if choice.get("finish_reason") == "length":
-                raise RuntimeError("Model output truncated")
+                raise ModelOutputError("truncated", u)
             text = choice["message"]["content"]
             if not isinstance(text, str) or not text.strip():
-                raise RuntimeError("Model returned empty content")
+                raise ModelOutputError("empty", u)
             settle(self.db, usage_id, actual)
             return text.strip()
         except Exception:

@@ -40,7 +40,7 @@ async def check():
             topic, first = await verified_topic(forum, result['candidates'][0]['topic_id'], category_id)
             assert first['user_id'] == identity.user_id
             config, _ = await recent_input(forum, topic['id'], topic['post_stream']['stream'], first,
-                                           {'max_tokens': 12000, 'output_limit': min(1000, model['max_output'])}, work, 0)
+                                           {'max_tokens': 12000, 'output_limit': min(2000, model['max_output'])}, work, 0)
             assert config['reservation'] <= 12000 and config['scanned'] <= 300
             output.update({'recent_scanned': config['scanned'], 'author_posts': config['author_posts'],
                            'older_omitted': config['older_omitted'], 'reserved_tokens': config['reservation'],

@@ -75,3 +75,7 @@ docker compose exec -T database dropdb -U suenmeow suenmeow_restore_check_exampl
 完整 PostgreSQL 测试曾触发 test 容器 256 MiB 限额 OOM；仅提升测试容器至 512 MiB，API/worker 各 256 MiB、网关 64 MiB 保持原限额。回滚仍使用匹配代码和数据库重建，不依赖旧镜像标签；先停止新 worker，保持论坛发送关闭。
 
 部署后另存 `v2-after-recent-import-20261005.dump` 与 `v2-code-after-recent-import-20261005.tar.gz`（0600）。数据库归档的 `pg_restore --list` 检查通过；配套源码不包含 secrets、runtime 或依赖目录。新归档尚未重新执行完整隔离恢复，历史演练证据保持独立。
+
+真实用户反馈导入失败后，另保留 `v2-before-memory-output-fix-20261005.dump` 与 `v2-code-before-memory-output-fix-20261005.tar.gz`（0600），后者从上一版匹配源码归档复制。输出保护升级无 schema、提示词发布或人格变更；新任务采用 compact_json，旧失败任务保持失败及原用量，不能自动重跑或清空额度。生产发送模式继续只读。
+
+修复后匹配归档为 `v2-after-memory-output-fix-20261005.dump` 与 `v2-code-after-memory-output-fix-20261005.tar.gz`（0600）。新数据库归档目录可读，不替代完整恢复演练。仅输出安全元数据的诊断为 `tools/diagnose_memory_import.py --topic 主题ID`；禁止为了诊断自动重跑用户的付费任务。

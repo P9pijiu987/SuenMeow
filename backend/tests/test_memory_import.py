@@ -190,6 +190,57 @@ async def test_real_adapter_reserves_task_and_topic_before_model_request(env):
     await model.close()
 
 
+@pytest.mark.parametrize('base,compact,enabled', [
+    ('https://api.deepseek.com', True, True),
+    ('https://api.deepseek.com', False, False),
+    ('https://api.deepseek.com.other.example', True, False),
+])
+async def test_compact_extraction_only_changes_official_deepseek_request(env, base, compact, enabled):
+    calls = []
+    def provider(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, json={'choices': [{'message': {'content': '{"facts":[]}'}, 'finish_reason': 'stop'}], 'usage': {'total_tokens': 123}})
+    model = Models(env[1], {'memory': {'base_url': base, 'api_key': 'fake', 'model': 'fake', 'max_output': 3000,
+                                      'temperature': 0, 'reasoning_effort': 'low'}}, transport=httpx.MockTransport(provider))
+    await model.complete('memory', [{'role': 'user', 'content': 'JSON facts'}], 42, Policy(),
+                         task_id='compact-check', task_limit=4000, output_limit=2000, compact_json=compact)
+    assert calls[0]['max_tokens'] == 2000
+    if enabled:
+        assert calls[0]['thinking'] == {'type': 'disabled'} and calls[0]['response_format'] == {'type': 'json_object'}
+        assert 'reasoning_effort' not in calls[0]
+    else:
+        assert 'thinking' not in calls[0] and 'response_format' not in calls[0] and calls[0]['reasoning_effort'] == 'low'
+    await model.close()
+
+
+@pytest.mark.parametrize('finish,content,message', [('length', '{"facts":', '达到上限'), ('stop', '', '有效正文')])
+async def test_incomplete_import_accounts_usage_without_save_cursor_or_retry(client, env, configured, finish, content, message):
+    route = {'base_url': 'https://api.deepseek.com', 'model': 'fake', 'api_key': 'fake', 'max_output': 3000, 'temperature': 0}
+    with env[1].transaction() as s:
+        s.get(KV, 'connection:memory').data = {'cipher': env[2].seal(route)}
+    job = client.post('/api/memory-imports/start', json={'topic_id': 42}).json()
+    assert job['config']['output_limit'] == 2000 and job['config']['reservation'] <= 12000
+    calls = []
+    def provider(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, json={'choices': [{'message': {'content': content, 'reasoning_content': 'PRIVATE-REASONING'}, 'finish_reason': finish}],
+            'usage': {'total_tokens': 4044, 'prompt_tokens': 3044, 'completion_tokens': 1000,
+                      'completion_tokens_details': {'reasoning_tokens': 999}}})
+    model = Models(env[1], {'memory': route}, transport=httpx.MockTransport(provider))
+    with env[1].transaction() as s: s.get(MemoryImport, job['id']).state = 'running'
+    await process_import(env[1], env[2], model, job['id'])
+    await process_import(env[1], env[2], model, job['id'])
+    assert len(calls) == 1
+    failed = client.get('/api/memory-imports').json()[0]
+    assert failed['state'] == 'failed' and message in failed['reason'] and 'PRIVATE-REASONING' not in json.dumps(failed)
+    assert client.get('/api/records/memory').json() == []
+    with env[1].transaction() as s:
+        assert not list(s.scalars(select(MemoryCursor)))
+        usage = s.scalar(select(Usage).where(Usage.task_id == job['id']))
+        assert usage.tokens == 4044 and usage.state == 'actual'
+    await model.close()
+
+
 @pytest.mark.asyncio
 async def test_hidden_activity_falls_back_to_one_bounded_author_search():
     requests = []

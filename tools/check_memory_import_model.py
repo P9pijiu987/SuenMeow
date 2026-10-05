@@ -27,7 +27,7 @@ async def check():
     model = Models(db, {'memory': route})
     try:
         response = await model.complete('memory', messages, 11957, Policy.model_validate(snapshot['policy']),
-                                        task_id=task_id, task_limit=12000, output_limit=min(1000, route['max_output']))
+                                        task_id=task_id, task_limit=12000, output_limit=min(2000, route['max_output']), compact_json=True)
         result = Facts.model_validate(json_output(response))
         assert result.facts and all(any(post['id'] == fact.source_post_id and fact.quote in post['text'] for post in posts) for fact in result.facts)
         assert any('绿色' in fact.text for fact in result.facts) and all(fact.source_post_id == 3 for fact in result.facts), 'Old temporary preferences should not displace current facts'
