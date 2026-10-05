@@ -93,3 +93,11 @@ docker compose exec -T database dropdb -U suenmeow suenmeow_restore_check_exampl
 显式 init 新增 `topic_pipelines` 表和 `topic_pipeline_lock`，schema 2、账号身份、原模块、发布v3和只读模式保持。备份 `v2-before-topic-pipelines-20261005.dump` 及 `v2-code-before-topic-pipelines-20261005.tar.gz`（0600）；配套源码从上一版完整历史研究归档复制。切换前确认没有进行中的记忆导入，再更新 API/worker/gateway，重启仍建立新水位、跳过积压。个人编排草稿不启用发送，回滚同时恢复匹配代码与数据库。
 
 部署后配套归档为 `v2-after-topic-pipelines-20261005.dump` 和 `v2-code-after-topic-pipelines-20261005.tar.gz`（0600、受限目录0700）；数据库归档272,199字节，`pg_restore --list`可读。源代码排除secrets、runtime、依赖与缓存。临时HTTPS权限验收账户已停用；系统继续read_only，没有替真实用户创建或发布个人编排。
+
+## 人格与个人编排可选审核（2026-10-05）
+
+用户要求审核可选且默认关闭，范围包含persona。显式init新增`topic_pipeline_settings.require_review=false`与`persona_publications`，不改原人格、账号、运行模式或既有发布快照。既有个人编排和待审核草稿保持原状态，用户可显式保存或启用；不在迁移时批量发布。管理员在两处提示词/个人编排界面调整同一开关。
+
+人格后续保存/审核发布时才更新已生效使用；仅已发布全局编排引用的人格会生成选择性新快照，保留系统工作规则、全局顺序及策略，新epoch仍重新建立论坛水位。旧发送和个人研究断点的专属运行代次失效，不能自动重试收费。全局系统提示词和编排继续管理员发布。开启审核为当时现有人格建立基线，未来修改待审核；关闭不批量启用旧草稿。
+
+切换前备份`v2-before-optional-review-20261005.dump`及匹配上一版源码`v2-code-before-optional-review-20261005.tar.gz`，切换后使用`v2-after-optional-review-20261005.dump`及`v2-code-after-optional-review-20261005.tar.gz`；目录0700、文件0600。先确认没有运行中的记忆导入，再init、切换服务和复核21个模块哈希。回滚恢复匹配代码/数据库并保留密钥，始终先关闭发送；新归档只验证目录可读，不代替完整隔离恢复演练。

@@ -386,6 +386,9 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
             s.add(r)
             s.flush()
             audit(s, account.id, "record_created", r.id, kind=kind)
+            if kind == 'module':
+                from .personas import saved_personas
+                saved_personas(s, [r], account.id)
             return record_dict(r)
 
     @app.put("/api/records/{kind}/{record_id}")
@@ -404,6 +407,9 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
             data = validated_data(kind, body.data, account)
             r.title, r.data, r.grants, r.version, r.updated = body.title, data, body.grants, r.version + 1, now()
             audit(s, account.id, "record_updated", r.id, kind=kind)
+            if kind == 'module':
+                from .personas import saved_personas
+                saved_personas(s, [r], account.id)
             return record_dict(r)
 
     @app.delete("/api/records/{kind}/{record_id}")

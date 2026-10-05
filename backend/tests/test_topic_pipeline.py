@@ -27,6 +27,7 @@ def setup_topic(client, env, monkeypatch):
         private = Record(kind='module', owner=env[3]['other'], title='私有草稿', data={'content': '不可公开的无引用模块'})
         s.add_all([persona, private]); s.flush()
         pid, private_id = persona.id, private.id
+    assert client.put('/api/topic-pipeline-settings', json={'require_review': True, 'version': 1}).status_code == 200
     return OwnForum, pid, private_id
 
 

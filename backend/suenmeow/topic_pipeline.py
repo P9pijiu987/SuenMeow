@@ -1,4 +1,4 @@
-"""Author-bound persona drafts, administrator publication and topic-local composition."""
+"""Author-bound persona composition with optional administrator review."""
 from copy import deepcopy
 
 from fastapi import Depends, HTTPException
@@ -9,7 +9,8 @@ from .adapters import Discourse
 from .database import Account, ForumIdentity, KV, Record, TopicPipeline, audit, locked, now
 from .domain import Strict
 from .memory_import import verified_topic
-from .personas import is_persona
+from .personas import accepted_persona, baseline_personas, is_persona, persona_data, publish_personas
+from .security import require_admin
 
 ROUTES = ('planner', 'replyer', 'memory', 'summary', 'agent')
 
@@ -25,7 +26,25 @@ class PipelineVersion(Strict):
     version: int = Field(ge=1)
 
 
-def validate_personas(s, order: dict) -> dict:
+class PipelineSettings(PipelineVersion):
+    require_review: bool = Field(strict=True)
+
+
+def freeze(s, row: TopicPipeline, binding: dict, actor: str):
+    for key, value in binding.items():
+        setattr(row, key, value)
+    if not valid_binding(s, row):
+        raise HTTPException(409, '身份或配置已变化，请重新核验')
+    modules = validate_personas(s, row.personas, approved=True)
+    row.published = {'persona_ids': [r.id for r in s.scalars(select(Record).where(Record.kind == 'module')) if is_persona(s, r)],
+                     'title': row.title, 'personas': deepcopy(row.personas), 'modules': modules,
+                     'topic_id': row.topic_id, 'owner': row.owner, **binding}
+    row.published_version, row.enabled = row.version, True
+    row.generation += 1
+    audit(s, actor, 'topic_pipeline_published', row.id, version=row.version)
+
+
+def validate_personas(s, order: dict, approved=False) -> dict:
     if set(order) != set(ROUTES) or any(len(ids) > 40 or len(ids) != len(set(ids)) for ids in order.values()):
         raise HTTPException(422, '需要五条路由，每条最多40个不同人格')
     selected = set(mid for ids in order.values() for mid in ids)
@@ -34,8 +53,12 @@ def validate_personas(s, order: dict) -> dict:
         raise HTTPException(422, '专属编排只能选择现有人格，系统工作规则由管理员维护')
     if any(sum(len(modules[mid].data.get('content', '').encode()) for mid in ids) > 200000 for ids in order.values()):
         raise HTTPException(422, '单条路由的人格内容过长')
-    return {mid: {'title': modules[mid].title, 'content': modules[mid].data.get('content', ''),
-                  'persona': True, 'version': modules[mid].version} for mid in selected}
+    accepted = {mid: accepted_persona(s, modules[mid]) if approved else persona_data(modules[mid]) for mid in selected}
+    if any(data is None for data in accepted.values()):
+        raise HTTPException(422, '所选人格尚未审核，请等待管理员发布人格')
+    if any(sum(len(accepted[mid]['content'].encode()) for mid in ids) > 200000 for ids in order.values()):
+        raise HTTPException(422, '单条路由的生效人格内容过长')
+    return accepted
 
 
 def pipeline_view(s, row: TopicPipeline) -> dict:
@@ -148,6 +171,27 @@ def mount_topic_pipelines(app, db, vault, user, admin):
                 query = query.where(TopicPipeline.owner == account.id)
             return [pipeline_view(s, row) for row in s.scalars(query)]
 
+    @app.get('/api/topic-pipeline-settings')
+    def settings(account=Depends(user)):
+        with db.transaction() as s:
+            row = s.get(KV, 'topic_pipeline_settings')
+            return {**row.data, 'version': row.version}
+
+    @app.put('/api/topic-pipeline-settings')
+    def update_settings(body: PipelineSettings, account=Depends(admin)):
+        with db.transaction() as s:
+            locked(s, 'editor_lock')
+            locked(s, 'control')
+            locked(s, 'topic_pipeline_lock')
+            row = locked(s, 'topic_pipeline_settings')
+            if row.version != body.version:
+                raise HTTPException(409, '审核设置已变化，请刷新后重试')
+            if body.require_review and not row.data['require_review']:
+                baseline_personas(s)
+            row.data, row.version = {'require_review': body.require_review}, row.version + 1
+            audit(s, account.id, 'topic_pipeline_settings_updated', require_review=body.require_review)
+            return {**row.data, 'version': row.version}
+
     @app.post('/api/topic-pipelines', status_code=201)
     async def create(body: PipelineDraft, account=Depends(user)):
         binding = await verify_owner(account, body.topic_id)
@@ -165,10 +209,18 @@ def mount_topic_pipelines(app, db, vault, user, admin):
                 raise HTTPException(409, '身份或论坛配置已变化，请重新核验')
             s.add(row); s.flush()
             audit(s, account.id, 'topic_pipeline_draft_created', row.id, topic_id=row.topic_id)
+            if not s.get(KV, 'topic_pipeline_settings').data['require_review']:
+                freeze(s, row, binding, account.id)
             return pipeline_view(s, row)
 
     @app.put('/api/topic-pipelines/{pid}')
-    def save(pid: str, body: PipelineDraft, account=Depends(user)):
+    async def save(pid: str, body: PipelineDraft, account=Depends(user)):
+        with db.transaction() as s:
+            row = owned(s, pid, account)
+            owner = s.get(Account, row.owner)
+            if row.topic_id != body.topic_id:
+                raise HTTPException(422, '绑定主题不能修改，请为另一篇本人个人贴新建编排')
+        binding = await verify_owner(owner, body.topic_id)
         with db.transaction() as s:
             locked(s, 'editor_lock')
             locked(s, 'control')
@@ -181,12 +233,16 @@ def mount_topic_pipelines(app, db, vault, user, admin):
             validate_personas(s, body.personas)
             row.title, row.personas, row.version, row.updated = body.title, body.personas, row.version + 1, now()
             audit(s, account.id, 'topic_pipeline_draft_saved', row.id)
+            if not s.get(KV, 'topic_pipeline_settings').data['require_review']:
+                freeze(s, row, binding, account.id)
             return pipeline_view(s, row)
 
     @app.post('/api/topic-pipelines/{pid}/publish')
-    async def publish_personal(pid: str, body: PipelineVersion, account=Depends(admin)):
+    async def publish_personal(pid: str, body: PipelineVersion, account=Depends(user)):
         with db.transaction() as s:
             row = owned(s, pid, account)
+            if s.get(KV, 'topic_pipeline_settings').data['require_review']:
+                require_admin(account)
             owner = s.get(Account, row.owner)
             topic_id = row.topic_id
         binding = await verify_owner(owner, topic_id)
@@ -195,19 +251,13 @@ def mount_topic_pipelines(app, db, vault, user, admin):
             locked(s, 'control')
             locked(s, 'topic_pipeline_lock')
             row = owned(s, pid, account)
+            if s.get(KV, 'topic_pipeline_settings').data['require_review']:
+                require_admin(account)
             if row.version != body.version:
                 raise HTTPException(409, '草稿已更新，请重新审核')
-            for key, value in binding.items():
-                setattr(row, key, value)
-            if not valid_binding(s, row):
-                raise HTTPException(409, '身份或配置已变化')
-            modules = validate_personas(s, row.personas)
-            row.published = {'persona_ids': [r.id for r in s.scalars(select(Record).where(Record.kind == 'module')) if is_persona(s, r)],
-                             'title': row.title, 'personas': deepcopy(row.personas), 'modules': modules, 'topic_id': row.topic_id,
-                             'owner': row.owner, **binding}
-            row.published_version, row.enabled = row.version, True
-            row.generation += 1
-            audit(s, account.id, 'topic_pipeline_published', row.id, version=row.version)
+            if account.role == 'admin':
+                publish_personas(s, [s.get(Record, mid) for mid in {mid for ids in row.personas.values() for mid in ids}], account.id)
+            freeze(s, row, binding, account.id)
             return pipeline_view(s, row)
 
     @app.post('/api/topic-pipelines/{pid}/disable')

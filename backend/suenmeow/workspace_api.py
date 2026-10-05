@@ -9,7 +9,7 @@ from .database import Account, KV, LoginSession, Record, audit, locked, now
 from .domain import ModuleData, Strict
 from .security import can_edit, client_address, digest, enforce_record, password_hash, require_admin
 from .service import ROUTES
-from .personas import is_persona, legacy_persona
+from .personas import accepted_persona, is_persona, legacy_persona, publish_personas, require_review, saved_personas
 
 
 class RegistrationInput(Strict):
@@ -80,10 +80,12 @@ def mount_workspace_api(app, db, settings, user, admin):
                 writable = can_edit(account, r)
                 modules.append(dict(id=r.id, owner=r.owner if writable else "", title=r.title, data=r.data,
                                     grants=r.grants if writable else [], version=r.version, updated=r.updated, editable=writable,
-                                    is_persona=is_persona(s, r), legacy_persona=legacy_persona(s, r.id, r.title)))
+                                    is_persona=is_persona(s, r), legacy_persona=legacy_persona(s, r.id, r.title),
+                                    persona_published_version=(accepted_persona(s, r) or {}).get('version', 0) if is_persona(s, r) else 0))
         result = {"modules": modules, "pipeline": {**pipeline.data, "agent": pipeline.data.get("agent", [])},
                   "pipeline_version": pipeline.version, "pipeline_editable": account.role == "admin",
-                  "active_snapshot": s.get(KV, "control").data["active_snapshot"]}
+                  "active_snapshot": s.get(KV, "control").data["active_snapshot"],
+                  "require_review": require_review(s)}
         if account.role == "admin":
             pipeline = s.get(KV, "pipeline")
             result.update(pipeline={**pipeline.data, "agent": pipeline.data.get("agent", [])},
@@ -171,6 +173,7 @@ def mount_workspace_api(app, db, settings, user, admin):
             if body.pipeline is not None and pipeline.version != body.pipeline_version:
                 raise HTTPException(409, "编排已被其他人修改；你的修改仍保留，请重新读取后合并")
             mapping = {}
+            changed_records = []
             for draft in sorted(body.deleted, key=lambda m: m.id):
                 r = s.scalar(select(Record).where(Record.id == draft.id, Record.kind == "module").with_for_update())
                 if not r:
@@ -209,6 +212,7 @@ def mount_workspace_api(app, db, settings, user, admin):
                     valid = set(s.scalars(select(Account.id).where(Account.active.is_(True))))
                     if set(draft.grants) - valid:
                         raise HTTPException(422, "授权账户不存在或已停用")
+                changed_records.append(r)
             order = ({k: [mapping.get(mid, mid) for mid in v] for k, v in body.pipeline.items()}
                      if body.pipeline is not None else pipeline.data)
             valid = set(s.scalars(select(Record.id).where(Record.kind == "module")))
@@ -218,4 +222,17 @@ def mount_workspace_api(app, db, settings, user, admin):
                 pipeline.data, pipeline.version = order, pipeline.version + 1
                 audit(s, account.id, "pipeline_draft_saved")
             s.flush()
+            saved_personas(s, changed_records, account.id)
             return {**view(s, account), "id_mapping": mapping}
+
+    @app.post('/api/personas/{mid}/publish')
+    def publish_persona(mid: str, body: DeletedModule, account=Depends(admin)):
+        with db.transaction() as s:
+            locked(s, 'editor_lock')
+            record = s.get(Record, mid)
+            if not record or record.kind != 'module' or not is_persona(s, record):
+                raise HTTPException(404, '人格不存在')
+            if body.id != mid or body.version != record.version:
+                raise HTTPException(409, '人格已变化，请重新审核')
+            publish_personas(s, [record], account.id)
+            return view(s, account)

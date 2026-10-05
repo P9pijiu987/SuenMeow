@@ -27,6 +27,9 @@ def check():
             login=call(editor,'POST','/auth/login',{'username':name,'password':password})
             editor.headers['x-csrf-token']=login['csrf']
             visible=call(editor,'GET','/prompts/workspace')
+            review=call(editor,'GET','/topic-pipeline-settings')
+            assert review['require_review'] is False
+            call(editor,'PUT','/topic-pipeline-settings',{**review,'require_review':True},403)
             expected={m['id'] for m in before['modules'] if m['is_persona'] or any(m['id'] in ids for ids in before['pipeline'].values())}
             assert {m['id'] for m in visible['modules']}==expected
             assert visible['pipeline']==before['pipeline'] and not visible['pipeline_editable'] and 'accounts' not in visible
@@ -46,7 +49,8 @@ def check():
             assert call(admin,'GET','/dashboard')['control']==dashboard['control']
             print(json.dumps({'https_shared_catalog':True,'personas_readable':sum(m['is_persona'] for m in visible['modules']),
                               'global_pipeline_readable':True,'shared_writes_rejected':403,'unverified_binding_rejected':403,
-                              'csrf_rejected':403,'published_prompts_unchanged':True,'mode':'read_only','model_calls':0,'forum_writes':0}))
+                              'csrf_rejected':403,'published_prompts_unchanged':True,'review_default_off':True,
+                              'review_settings_admin_only':True,'mode':'read_only','model_calls':0,'forum_writes':0}))
         finally:
             call(admin,'PUT','/accounts/'+account['id'],{'username':name,'password':'','role':'editor','active':False,'forum_username':''})
             call(admin,'POST','/auth/logout')

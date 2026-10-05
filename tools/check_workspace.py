@@ -22,7 +22,7 @@ def login(client, username, password):
 
 
 def signature(workspace):
-    return {m['id']: sha256(json.dumps({k:v for k,v in m.items() if k not in ('editable', 'is_persona', 'legacy_persona')}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    return {m['id']: sha256(json.dumps({k:v for k,v in m.items() if k not in ('editable', 'is_persona', 'legacy_persona', 'persona_published_version')}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
             for m in workspace['modules']}
 
 

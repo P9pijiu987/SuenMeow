@@ -41,6 +41,8 @@ def publish(s, actor: str, note: str, source: dict | None = None):
     locked(s, "pipeline")
     control = locked(s, "control")
     if source is None:
+        from .personas import publish_personas
+        publish_personas(s, list(s.scalars(select(Record).where(Record.kind == 'module'))), actor, refresh_global=False)
         policy = Policy.model_validate(s.get(KV, "policy").data).model_dump()
         pipeline = s.get(KV, "pipeline").data
         modules = {r.id: {"title": r.title, "content": r.data.get("content", ""), "persona": bool(r.data.get("persona")), "version": r.version}

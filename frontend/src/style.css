@@ -53,6 +53,7 @@ fieldset { padding: 0; margin: 0; border: 0; min-width: 0; }
 .auth-tabs { margin-bottom: 23px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
 .workspace-intro { display: flex; align-items: center; gap: 18px; justify-content: space-between; margin-bottom: 22px; }
 .workspace-intro h2 { font-size: 22px; margin: 0 0 7px; }
+.review-settings { margin-bottom: 22px; }
 .workspace-intro p { font-size: 12px; margin: 0; }
 .prompt-columns { display: grid; grid-template-columns: 190px minmax(260px, 1fr) 250px; align-items: start; gap: 16px; }
 .editor-workspace .prompt-columns { grid-template-columns: 190px minmax(260px, 1fr) 250px; }
