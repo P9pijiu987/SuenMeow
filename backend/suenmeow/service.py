@@ -88,9 +88,11 @@ def quiet(policy: Policy, timestamp: float):
 def reserve(db, route: str, topic_id: int, tokens: int, policy: Policy, task_id="", task_limit=0) -> str:
     with db.transaction() as s:
         locked(s, "budget_lock")
+        job = s.get(MemoryImport, task_id) if route == "memory" and task_id else None
+        full_memory = bool(job and job.config.get("full"))
         total = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).where(Usage.day == day()))
         topic = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).where(Usage.day == day(), Usage.topic_id == topic_id))
-        if total + tokens > policy.daily_tokens or topic + tokens > policy.topic_tokens:
+        if total + tokens > policy.daily_tokens or (not full_memory and topic + tokens > policy.topic_tokens):
             raise BudgetExceeded("模型预算不足")
         if task_id and task_limit:
             used = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).where(Usage.task_id == task_id))
@@ -99,7 +101,7 @@ def reserve(db, route: str, topic_id: int, tokens: int, policy: Policy, task_id=
         if route == "memory" and task_id:
             job = s.get(MemoryImport, task_id)
             owner = s.get(Account, job.owner) if job else None
-            if owner and owner.role != "admin":
+            if owner and owner.role != "admin" and not full_memory:
                 personal = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).join(MemoryImport, Usage.task_id == MemoryImport.id).where(MemoryImport.owner == owner.id, Usage.day == day()))
                 if personal + tokens > 20000:
                     raise BudgetExceeded("本人的每日记忆 token 额度不足")

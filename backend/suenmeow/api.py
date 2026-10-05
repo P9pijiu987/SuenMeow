@@ -411,12 +411,20 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
         with db.transaction() as s:
             if kind == "module":
                 locked(s, "editor_lock")
+            if kind == "memory":
+                locked(s, "memory_import_lock")
             r = s.get(Record, record_id)
             if not r or r.kind != kind:
                 raise HTTPException(404, "内容不存在")
             enforce_record(account, r)
             if kind == "module":
                 require_admin(account)
+            if kind == "memory":
+                from .memory_import import memory_fingerprint
+                data = vault.open(r.data["cipher"])
+                if data.get("origin") == "personal_topic":
+                    row = locked(s, "memory_tombstones")
+                    row.data = {**row.data, memory_fingerprint(data): True}
             s.delete(r)
             audit(s, account.id, "record_deleted", record_id, kind=kind)
         return {"ok": True}

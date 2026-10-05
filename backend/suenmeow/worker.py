@@ -74,12 +74,13 @@ class Worker:
                 return
             job.state = "running"
             job_id = job.id
+            full = bool(job.config.get("full"))
             row = s.get(KV, "connection:memory")
             route = self.vault.open(row.data["cipher"]) if row else None
         async def run():
             models = self.models_factory(self.db, {"memory": route} if route else {})
             try:
-                async with asyncio.timeout(120):
+                async with asyncio.timeout(86400 if full else 120):
                     await process_import(self.db, self.vault, models, job_id)
             except TimeoutError:
                 with self.db.transaction() as s:
@@ -266,8 +267,9 @@ class Worker:
                     continue
                 try:
                     evidence = await self.forum.selected_posts(source, [data["source_post_id"]])
+                    from .adapters import source_text
                     if not any(post.get("user_id") == data.get("forum_user_id") and not post.get("identity_message")
-                               and not post.get("has_quotes") and data.get("quote", "") in post["text"] for post in evidence):
+                               and data.get("quote", "") in source_text(post) for post in evidence):
                         continue
                 except Exception:
                     continue

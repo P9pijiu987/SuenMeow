@@ -12,6 +12,7 @@ from .database import (Account, AgentDraft, AgentMessage, AgentSession, AgentSou
 from .domain import AgentMessageInput, AgentPolicy, Policy, Strict
 from .security import digest, same_token
 from .prompts import AGENT
+from .adapters import source_text
 
 TERMINAL = {"completed", "awaiting_confirmation", "failed", "cancelled", "expired", "interrupted"}
 
@@ -335,8 +336,8 @@ class AgentEngine:
                     if not posts:
                         continue
                     if fact.get("origin") == "personal_topic" and (fact.get("site") != self.forum.connection["base_url"] or
-                            not any(p.get("user_id") == fact.get("forum_user_id") and not p.get("has_quotes")
-                                    and fact.get("quote", "") in p["text"] for p in posts)):
+                            not any(p.get("user_id") == fact.get("forum_user_id") and not p.get("identity_message")
+                                    and fact.get("quote", "") in source_text(p) for p in posts)):
                         continue
                     source = self.source(topic, posts[0])
                     self.constraints["memory_ids"] = list(dict.fromkeys([*self.constraints.get("memory_ids", []), row.id]))

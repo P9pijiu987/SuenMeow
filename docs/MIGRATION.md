@@ -79,3 +79,11 @@ docker compose exec -T database dropdb -U suenmeow suenmeow_restore_check_exampl
 真实用户反馈导入失败后，另保留 `v2-before-memory-output-fix-20261005.dump` 与 `v2-code-before-memory-output-fix-20261005.tar.gz`（0600），后者从上一版匹配源码归档复制。输出保护升级无 schema、提示词发布或人格变更；新任务采用 compact_json，旧失败任务保持失败及原用量，不能自动重跑或清空额度。生产发送模式继续只读。
 
 修复后匹配归档为 `v2-after-memory-output-fix-20261005.dump` 与 `v2-code-after-memory-output-fix-20261005.tar.gz`（0600）。新数据库归档目录可读，不替代完整恢复演练。仅输出安全元数据的诊断为 `tools/diagnose_memory_import.py --topic 主题ID`；禁止为了诊断自动重跑用户的付费任务。
+
+## 全量研究升级
+
+用户明确要求所有发言都研究。init 增量建立 `memory_full_coverage` 和 `memory_tombstones`，无表结构变化；保留旧近期游标作并发检查，首次全量读取全部历史，成功后才记录新覆盖标记。原预览任务维持兼容；新任务不受旧个人 token/三次额度限制，仍遵守管理员全站日额度。worker 的全量任务超时延长至24小时，重启后仍中断，用户可以手动继续加密断点，不自动重新调用模型。
+
+升级前归档 `v2-before-full-memory-20261005.dump` 与 `v2-code-before-full-memory-20261005.tar.gz`（0600），源码从上一版配套归档复制。依序 init、重建 API/worker/gateway，保留只读、发布v3、21个模块和七个人格。旧失败任务与原收费记录不重跑、不清空。新增删除来源指纹不能追溯恢复升级前已经删除的来源信息。
+
+部署后匹配归档为 `v2-after-full-memory-20261005.dump` 与 `v2-code-after-full-memory-20261005.tar.gz`，均0600、受限目录0700。数据库归档254,381字节，`pg_restore --list` 通过；此轮不宣称新归档完成完整恢复演练。源码归档排除依赖、缓存、secrets 与 runtime。

@@ -1,13 +1,13 @@
-"""Read-only discovery/recent-input probe using a real verified identity. No model or new session."""
+"""Read-only discovery/full-source probe using a real verified identity. No model or new session."""
 import asyncio
 import json
 from types import SimpleNamespace
 
 from sqlalchemy import select
 
-from suenmeow.adapters import Discourse
-from suenmeow.database import Account, Database, ForumIdentity, KV, Snapshot
-from suenmeow.memory_import import mount_memory_import, recent_input, verified_topic
+from suenmeow.adapters import Discourse, source_text
+from suenmeow.database import Account, Database, ForumIdentity, KV
+from suenmeow.memory_import import mount_memory_import, SENSITIVE, verified_topic
 from suenmeow.security import Vault
 from suenmeow.settings import Settings
 
@@ -22,9 +22,7 @@ async def check():
             ForumIdentity.site == conf['base_url'], Account.role == 'editor', Account.active.is_(True)).order_by(ForumIdentity.updated.desc()))
         assert identity, 'Requires an actual user-verified forum identity'
         account = s.get(Account, identity.account_id)
-        snapshot = s.get(Snapshot, s.get(KV, 'control').data['active_snapshot']).data
-        work = '\n\n'.join(snapshot['modules'][key]['content'] for key in snapshot['pipeline']['memory'])
-        model = vault.open(s.get(KV, 'connection:memory').data['cipher'])
+
     routers = []
     mount_memory_import(SimpleNamespace(include_router=routers.append), db, vault, lambda: account)
     route = next(route for route in routers[0].routes if getattr(route, 'path', '') == '/api/memory-imports/detect')
@@ -39,12 +37,24 @@ async def check():
             await forum.login()
             topic, first = await verified_topic(forum, result['candidates'][0]['topic_id'], category_id)
             assert first['user_id'] == identity.user_id
-            config, _ = await recent_input(forum, topic['id'], topic['post_stream']['stream'], first,
-                                           {'max_tokens': 12000, 'output_limit': min(2000, model['max_output'])}, work, 0)
-            assert config['reservation'] <= 12000 and config['scanned'] <= 300
-            output.update({'recent_scanned': config['scanned'], 'author_posts': config['author_posts'],
-                           'older_omitted': config['older_omitted'], 'reserved_tokens': config['reservation'],
-                           'cursor_updates': 0})
+            scanned, authors, filtered, chars = 0, 0, 0, 0
+            stream = topic['post_stream']['stream']
+            for offset in range(0, len(stream), 20):
+                ids = stream[offset:offset + 20]
+                posts = await forum.selected_posts(topic['id'], ids)
+                scanned += len(ids)
+                for post in posts:
+                    if post['user_id'] != identity.user_id:
+                        continue
+                    text = source_text(post)
+                    if post.get('identity_message') or not text or SENSITIVE.search(text):
+                        filtered += 1
+                    else:
+                        authors += 1
+                        chars += len(text)
+            await verified_topic(forum, topic['id'], category_id)
+            output.update({'all_visible_posts': scanned, 'author_posts': authors, 'author_chars': chars,
+                           'filtered_author_posts': filtered, 'cursor_updates': 0})
         finally:
             await forum.close()
     print(json.dumps(output))

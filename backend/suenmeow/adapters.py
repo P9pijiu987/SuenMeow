@@ -30,16 +30,26 @@ class ModelOutputError(RuntimeError):
 
 
 class TextExtractor(HTMLParser):
-    def __init__(self):
+    def __init__(self, remove_quotes=False):
         super().__init__()
         self.parts = []
+        self.remove_quotes, self.quote_depth = remove_quotes, 0
 
     def handle_data(self, data):
-        self.parts.append(data)
+        if not self.quote_depth:
+            self.parts.append(data)
 
     def handle_starttag(self, tag, attrs):
+        if self.remove_quotes and tag == "blockquote":
+            self.quote_depth += 1
+        if self.quote_depth:
+            return
         if tag in ("br", "p", "li", "div"):
             self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if self.remove_quotes and tag == "blockquote" and self.quote_depth:
+            self.quote_depth -= 1
 
 
 class ClientSettingsParser(HTMLParser):
@@ -79,10 +89,32 @@ def plain(html: str) -> str:
 def safe_post(post: dict) -> dict:
     text = post.get("raw") or plain(post.get("cooked", ""))
     sanitized = private_identity_text(text)
+    quoted = "[quote" in text.lower() or any(line.lstrip().startswith(">") for line in text.splitlines()) or "<blockquote" in post.get("cooked", "").lower()
+    if not quoted:
+        own = text
+    elif post.get("cooked"):
+        parser = TextExtractor(remove_quotes=True)
+        parser.feed(post.get("cooked", ""))
+        own = "".join(parser.parts)
+    else:
+        depth, fragments = 0, []
+        for fragment in re.split(r"(\[/?quote\b[^\]]*\])", text, flags=re.I):
+            if re.match(r"\[quote\b", fragment, re.I):
+                depth += 1
+            elif re.match(r"\[/quote\b", fragment, re.I):
+                depth = max(0, depth - 1)
+            elif not depth:
+                fragments.append(fragment)
+        own = "\n".join(line for line in "".join(fragments).splitlines() if not line.lstrip().startswith(">"))
     return {"id": post["id"], "number": post.get("post_number", 0), "username": post.get("username", ""),
-            "user_id": post.get("user_id"), "text": sanitized, "created": post.get("created_at"),
-            "has_quotes": "[quote" in text.lower() or any(line.lstrip().startswith(">") for line in text.splitlines()) or "<blockquote" in post.get("cooked", "").lower(),
+            "user_id": post.get("user_id"), "text": sanitized, "author_text": private_identity_text(own).strip(), "created": post.get("created_at"),
+            "has_quotes": quoted,
             "identity_message": sanitized != text}
+
+
+def source_text(post):
+    """Only adapter-separated author text can be used from a mixed quoted post."""
+    return post.get("author_text", "" if post.get("has_quotes") else post.get("text", ""))
 
 
 def timestamp(value) -> float:

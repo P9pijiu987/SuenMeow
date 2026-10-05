@@ -69,6 +69,20 @@ class FakeModels:
     async def close(self): pass
 
 
+class FullModels:
+    def __init__(self): self.calls = 0; self.researched = []
+    async def complete(self, route, messages, topic_id, policy, **kwargs):
+        assert route == 'memory' and topic_id == 0 and kwargs['compact_json']
+        self.calls += 1
+        data = json.loads(messages[1]['content'])
+        if 'facts' in data:
+            return json.dumps({'keep': list(range(len(data['facts'])))})
+        self.researched.extend(data['posts'])
+        posts = data['posts']
+        return json.dumps({'facts': [{'text': f"资料 {p['id']} · {p.get('part', 1)}", 'quote': p['text'][:60], 'source_post_id': p['id']} for p in posts[:12]]}, ensure_ascii=False)
+    async def close(self): pass
+
+
 async def extract(client, env, job, models=None):
     assert client.post(f"/api/memory-imports/{job['id']}/extract").status_code == 200
     with env[1].transaction() as s: s.get(MemoryImport, job['id']).state = 'running'
@@ -219,7 +233,7 @@ async def test_incomplete_import_accounts_usage_without_save_cursor_or_retry(cli
     with env[1].transaction() as s:
         s.get(KV, 'connection:memory').data = {'cipher': env[2].seal(route)}
     job = client.post('/api/memory-imports/start', json={'topic_id': 42}).json()
-    assert job['config']['output_limit'] == 2000 and job['config']['reservation'] <= 12000
+    assert job['config']['full'] and job['config']['output_limit'] == 3000
     calls = []
     def provider(request):
         calls.append(json.loads(request.content))
@@ -395,26 +409,25 @@ async def test_personal_token_limit_is_checked_atomically_before_provider(client
 
 
 @pytest.mark.asyncio
-async def test_one_click_recent_auto_saves_then_delete_does_not_revive(client, env, configured):
+async def test_one_click_full_auto_saves_then_delete_does_not_revive(client, env, configured):
     bind_editor(client, env)
     job = client.post('/api/memory-imports/start', json={'topic_id': 42}).json()
-    assert job['state'] == 'queued' and job['config']['recent'] and job['config']['remaining'] == 0
+    assert job['state'] == 'queued' and job['config']['full'] and job['config']['total_posts'] == 5
     with env[1].transaction() as s:
         row = s.get(MemoryImport, job['id']); row.state = 'running'
-        posts = json.loads(env[2].open(row.input_cipher)[1]['content'])['posts']
-        assert [p['id'] for p in posts] == [5, 1]
-    models = FakeModels()
+        assert env[2].open(row.input_cipher)['ids'] == [1, 2, 3, 4, 5]
+    models = FullModels()
     await process_import(env[1], env[2], models, job['id'])
     result = client.get('/api/memory-imports').json()[0]
-    assert result['state'] == 'saved' and result['result']['saved'] == 1 and models.calls == 1
+    assert result['state'] == 'saved' and result['result']['saved'] == 2 and models.calls == 2
     memory = client.get('/api/records/memory').json()[0]
-    assert memory['data']['source_post_id'] == 5
+    assert memory['data']['source_post_id'] in (1, 5)
     assert client.delete('/api/records/memory/' + memory['id']).status_code == 200
     again = client.post('/api/memory-imports/start', json={'topic_id': 42}).json()
     with env[1].transaction() as s: s.get(MemoryImport, again['id']).state = 'running'
-    zero = FakeModels()
+    zero = FullModels()
     await process_import(env[1], env[2], zero, again['id'])
-    assert zero.calls == 0 and client.get('/api/records/memory').json() == []
+    assert zero.calls == 0 and len(client.get('/api/records/memory').json()) == 1
 
 
 def test_category_filter_is_server_enforced_and_settings_admin_only(client, env, configured):
@@ -430,25 +443,32 @@ def test_category_filter_is_server_enforced_and_settings_admin_only(client, env,
 
 
 @pytest.mark.asyncio
-async def test_recent_budget_reads_newest_first_and_explicitly_omits_older(client, env, configured):
-    configured.posts = [post(i, text=f'我最近在照料盆栽{i}。' * 150) for i in range(1, 602)]
+async def test_full_research_reads_more_than_300_posts_and_entire_long_original(client, env, configured):
+    configured.posts = [post(i) for i in range(1, 302)]
+    configured.posts[0]['text'] = '照料薄荷盆栽。' * 4000 + '最末尾也必须完整研究。'
     calls = []
     async def selected(self, topic_id, ids): calls.append(ids); return [p for p in self.posts if p['id'] in ids]
     configured.selected_posts = selected
     job = client.post('/api/memory-imports/start', json={'topic_id': 42, 'max_tokens': 6000}).json()
-    assert job['state'] == 'queued' and job['config']['older_omitted'] > 590
-    assert job['config']['reservation'] <= 6000 and job['config']['last'] == 601
+    assert job['state'] == 'queued' and job['config']['total_posts'] == 301 and job['config']['last'] == 301
     with env[1].transaction() as s:
-        posts = json.loads(env[2].open(s.get(MemoryImport, job['id']).input_cipher)[1]['content'])['posts']
-        assert posts[0]['id'] == 601 and all(p['id'] > 590 for p in posts)
-    assert len(calls) == 1 and calls[0][0] == 601
+        s.get(MemoryImport, job['id']).state = 'running'
+    models = FullModels()
+    await process_import(env[1], env[2], models, job['id'])
+    result = client.get('/api/memory-imports').json()[0]
+    assert result['state'] == 'saved' and result['config']['scanned'] == 301 and result['config']['author_posts'] == 301
+    assert ''.join(p['text'] for p in models.researched if p['id'] == 1) == configured.posts[0]['text']
+    assert {p['id'] for p in models.researched} == set(range(1, 302))
+    assert all(len(ids) <= 20 for ids in calls)
+    assert result['config']['analysed_chars'] == sum(len(p['text']) for p in configured.posts)
+    assert result['result']['saved'] > 8
 
 
 @pytest.mark.asyncio
 async def test_auto_save_rechecks_source_visibility_before_cursor_or_facts(client, env, configured):
     job = client.post('/api/memory-imports/start', json={'topic_id': 42}).json()
     with env[1].transaction() as s: s.get(MemoryImport, job['id']).state = 'running'
-    class Changed(FakeModels):
+    class Changed(FullModels):
         async def complete(self, *args, **kwargs):
             result = await super().complete(*args, **kwargs)
             configured.public = False
@@ -457,6 +477,100 @@ async def test_auto_save_rechecks_source_visibility_before_cursor_or_facts(clien
     with env[1].transaction() as s:
         assert s.get(MemoryImport, job['id']).state == 'failed'
         assert not list(s.scalars(select(MemoryCursor))) and not list(s.scalars(select(Record).where(Record.kind == 'memory')))
+
+
+async def test_full_ignores_old_partial_cursor_and_resumes_completed_chunks(client, env, configured):
+    from suenmeow.adapters import ModelOutputError
+    bind_editor(client, env)
+    configured.posts = [post(1, text='照料薄荷盆栽。' * 5000), post(5, text='周末喜欢骑车。')]
+    with env[1].transaction() as s:
+        s.add(MemoryCursor(site='https://forum.example', topic_id=42, user_id=7, last_post_id=5))
+    job = client.post('/api/memory-imports/start', json={'topic_id': 42}).json()
+    assert job['config']['base'] == 5 and not job['config']['incremental']
+    class Broken(FullModels):
+        async def complete(self, *args, **kwargs):
+            if self.calls == 1:
+                raise ModelOutputError('truncated', {'completion_tokens': 1000})
+            return await super().complete(*args, **kwargs)
+    with env[1].transaction() as s: s.get(MemoryImport, job['id']).state = 'running'
+    broken = Broken()
+    await process_import(env[1], env[2], broken, job['id'])
+    failed = client.get('/api/memory-imports').json()[0]
+    assert failed['state'] == 'failed' and failed['config']['model_calls'] == 1
+    assert failed['config']['analysed_chars'] > 0 and client.get('/api/records/memory').json() == []
+    assert client.post(f"/api/memory-imports/{job['id']}/resume").status_code == 200
+    with env[1].transaction() as s: s.get(MemoryImport, job['id']).state = 'running'
+    resumed = FullModels()
+    await process_import(env[1], env[2], resumed, job['id'])
+    done = client.get('/api/memory-imports').json()[0]
+    assert done['state'] == 'saved'
+    assert sum(len(p['text']) for p in broken.researched + resumed.researched) == sum(len(p['text']) for p in configured.posts)
+    assert done['config']['analysed_chars'] == sum(len(p['text']) for p in configured.posts)
+
+
+async def test_full_personal_caps_removed_but_global_daily_budget_is_enforced(client, env, configured):
+    bind_editor(client, env)
+    with env[1].transaction() as s:
+        previous = MemoryImport(owner=env[3]['editor'], topic_id=42, state='failed', config={}, expires=now()+300, input_cipher=env[2].seal({}))
+        s.add(previous); s.flush()
+        s.add(Usage(day=day(), route='memory', topic_id=42, tokens=20000, reserved=20000, state='actual', task_id=previous.id))
+    job = client.post('/api/memory-imports/start', json={'topic_id': 42}).json()
+    assert job['state'] == 'queued'
+    calls = []
+    def provider(request):
+        calls.append(True)
+        return httpx.Response(200, json={'choices': [{'message': {'content': '{"facts":[]}'}, 'finish_reason': 'stop'}], 'usage': {'total_tokens': 200}})
+    model = Models(env[1], {'memory': {'base_url': 'https://fake.example', 'api_key': 'fake', 'model': 'fake', 'max_output': 1000, 'temperature': 0}}, transport=httpx.MockTransport(provider))
+    await model.complete('memory', [{'role': 'user', 'content': '全部研究'}], 0, Policy(topic_tokens=1000), task_id=job['id'])
+    assert len(calls) == 1
+    with pytest.raises(BudgetExceeded):
+        await model.complete('memory', [{'role': 'user', 'content': '不得突破全站额度'}], 0, Policy(daily_tokens=1000), task_id=job['id'])
+    assert len(calls) == 1
+    await model.close()
+
+
+def test_mixed_quote_keeps_only_author_original_and_unicode_slices_are_lossless():
+    from suenmeow.adapters import safe_post, source_text
+    from suenmeow.full_memory import split_text
+    raw = safe_post({'id': 1, 'raw': '[quote="visitor"]他人喜欢蓝色[/quote]\n我现在喜欢绿色。'})
+    cooked = safe_post({'id': 1, 'cooked': '<blockquote>他人喜欢蓝色</blockquote><p>我现在喜欢绿色。</p>'})
+    assert source_text(raw) == source_text(cooked) == '我现在喜欢绿色。'
+    text = '你好🐈world' * 10000
+    assert ''.join(split_text(text)) == text
+
+
+async def test_full_rechecks_public_visibility_before_first_model_request(client, env, configured):
+    job = client.post('/api/memory-imports/start', json={'topic_id': 42}).json()
+    original = configured.selected_posts
+    async def changed(self, topic_id, ids):
+        posts = await original(self, topic_id, ids)
+        if len(ids) > 2:
+            configured.public = False
+        return posts
+    configured.selected_posts = changed
+    with env[1].transaction() as s: s.get(MemoryImport, job['id']).state = 'running'
+    models = FullModels()
+    await process_import(env[1], env[2], models, job['id'])
+    assert models.calls == 0 and client.get('/api/memory-imports').json()[0]['state'] == 'failed'
+    assert client.get('/api/records/memory').json() == []
+
+
+async def test_deleted_fact_tombstone_survives_first_full_rebuild(client, env, configured):
+    from suenmeow.full_memory import coverage_key
+    bind_editor(client, env)
+    job = client.post('/api/memory-imports/start', json={'topic_id': 42}).json()
+    with env[1].transaction() as s: s.get(MemoryImport, job['id']).state = 'running'
+    await process_import(env[1], env[2], FullModels(), job['id'])
+    records = client.get('/api/records/memory').json()
+    assert len(records) == 2
+    assert client.delete('/api/records/memory/' + records[0]['id']).status_code == 200
+    with env[1].transaction() as s:
+        s.get(KV, 'memory_full_coverage').data = {}
+        assert s.get(KV, 'memory_tombstones').data
+    again = client.post('/api/memory-imports/start', json={'topic_id': 42}).json()
+    with env[1].transaction() as s: s.get(MemoryImport, again['id']).state = 'running'
+    await process_import(env[1], env[2], FullModels(), again['id'])
+    assert len(client.get('/api/records/memory').json()) == 1
 
 
 @pytest.mark.asyncio
