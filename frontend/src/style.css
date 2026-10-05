@@ -119,3 +119,11 @@ fieldset { padding: 0; margin: 0; border: 0; min-width: 0; }
 .import-fact blockquote { margin: 8px 0; color: var(--muted); font-size: 13px; }
 .import-discovery button { margin: 0 8px 8px 0; text-align: left; }
 @media (max-width: 700px) { .memory-import .field-grid { grid-template-columns: 1fr; } }
+
+.memory-quote { margin: 14px 0; padding: 10px 14px; border-left: 2px solid var(--line); color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.import-settings { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.import-settings summary { cursor: pointer; color: var(--muted); margin-bottom: 12px; }
+
+.import-link { margin-top: 16px; }
+.import-link summary { cursor: pointer; color: var(--muted); margin-bottom: 12px; }
+.memory-import a, .module-grid article > a { color: var(--green); font-size: 13px; text-underline-offset: 3px; }

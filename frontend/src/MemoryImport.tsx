@@ -1,42 +1,51 @@
-import { useEffect, useState } from 'react'
-import { BookOpen, Check, RefreshCw } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { BookOpen, RefreshCw } from 'lucide-react'
 import { api, type Data } from './api'
+import { SaveDock, useDraftSafety } from './DraftSafety'
 
 export function MemoryImport({ onSaved, admin }: { onSaved: () => void, admin: boolean }) {
-  const [topic, setTopic] = useState(''), [budget, setBudget] = useState(12000)
-  const [jobs, setJobs] = useState<Data[]>([]), [error, setError] = useState('')
-  const [busy, setBusy] = useState(false), [selected, setSelected] = useState<number[]>([])
-  const [detected, setDetected] = useState<Data | null>(null)
-  const job = jobs[0], active = job && ['preparing', 'preview', 'queued', 'running', 'awaiting_save'].includes(job.state)
+  const [topic, setTopic] = useState(''), [jobs, setJobs] = useState<Data[]>([])
+  const [error, setError] = useState(''), [busy, setBusy] = useState(false)
+  const [detected, setDetected] = useState<Data | null>(null), [category, setCategory] = useState(22)
+  const [savedCategory, setSavedCategory] = useState(22), [settingsError, setSettingsError] = useState('')
+  const [settingsBusy, setSettingsBusy] = useState(false)
+  const savedId = useRef(''), job = jobs[0]
+  const active = job && ['preparing', 'preview', 'queued', 'running', 'awaiting_save'].includes(job.state)
+  const discover = async () => { setDetected(null); try { setDetected(await api('/memory-imports/detect')) } catch { setDetected({ candidates: [], message: '自动查找暂时不可用，请粘贴个人贴链接' }) } }
   const reload = async () => { try { setJobs(await api('/memory-imports')) } catch (e) { setError((e as Error).message) } }
-  useEffect(() => { void reload(); const timer = setInterval(reload, 3000); return () => clearInterval(timer) }, [])
-  useEffect(() => { let stopped = false; void api('/memory-imports/detect').then(result => { if (!stopped) setDetected(result) }).catch(() => { if (!stopped) setDetected({ candidates: [], message: '自动查找暂时不可用，请粘贴个人贴链接' }) }); return () => { stopped = true } }, [])
-  useEffect(() => { setSelected((job?.result?.facts || []).map((_: Data, i: number) => i)) }, [job?.id, job?.state])
+  useEffect(() => { void reload(); void discover(); void api('/memory-imports/settings').then(result => { setCategory(result.category_id); setSavedCategory(result.category_id) }).catch(() => {}); const timer = setInterval(reload, 3000); return () => clearInterval(timer) }, [])
+  useEffect(() => { if (job?.state === 'saved' && savedId.current !== job.id) { savedId.current = job.id; onSaved() } }, [job?.id, job?.state])
   const run = async (path: string, body?: Data) => {
     setBusy(true); setError('')
-    try { await api(path, 'POST', body); await reload(); if (path.endsWith('/save')) onSaved() }
-    catch (e) { setError((e as Error).message) }
+    try { await api(path, 'POST', body); await reload() }
+    catch (e) { setError((e as Error).message); await reload() }
     finally { setBusy(false) }
   }
-  const labels: Data = { preparing: '正在读取', preview: '等待确认作者', queued: '等待提取', running: '提取中', awaiting_save: '等待选择事实', saved: '已保存', empty: '没有新事实', failed: '未完成', cancelled: '已取消', interrupted: '重启后停止', expired: '已过期' }
+  const start = (source: string) => run('/memory-imports/start', { ...(/^\d+$/.test(source) ? { topic_id: Number(source) } : { topic_url: source }) })
+  const dirty = admin && category !== savedCategory
+  const saveSettings = async () => {
+    if (!dirty) return true
+    if (settingsBusy || !Number.isInteger(category) || category < 1 || category > 2147483647) return false
+    setSettingsBusy(true); setSettingsError('')
+    try { await api('/memory-imports/settings', 'PUT', { category_id: category }); setSavedCategory(category); await discover(); return true }
+    catch (e) { setSettingsError((e as Error).message); return false }
+    finally { setSettingsBusy(false) }
+  }
+  useDraftSafety(dirty, saveSettings, settingsBusy)
+  const labels: Data = { preparing: '正在读取近期发言', preview: '上次导入尚未确认', queued: '等待整理', running: '正在整理并保存', awaiting_save: '上次候选等待保存', saved: '记忆已放入书架', empty: '没有新增记忆', failed: '导入未完成', cancelled: '已停止', interrupted: '重启后停止', expired: '已过期' }
   return <section className="panel memory-import">
-    <div className="section-head"><div><h3><BookOpen size={18}/> {admin ? '从个人贴建立记忆' : '让猫从你的个人贴认识你'}</h3><p className="muted">{admin ? '只读帖主自己的公开发言。先核对作者与预算，再提取、选择保存。' : '仅限你本人创建的公开主题。先预览，再选择猫可以记住的事实。'}</p></div><button className="icon-button" aria-label="刷新导入进度" onClick={reload}><RefreshCw size={16}/></button></div>
-    {!admin && <p className="muted">每次最多 12,000 token；每日最多提取 3 批、20,000 token，仍受全站预算限制。查找和预览不调用模型。</p>}
-    {!active && <div className="import-discovery"><p className="muted">{detected?.message || '正在查找你创建的公开主题…'}</p>{detected?.candidates?.map((candidate: Data) => <button key={candidate.topic_id} disabled={busy} onClick={() => { setTopic(String(candidate.topic_id)); void run('/memory-imports', { topic_id: candidate.topic_id, max_tokens: budget }) }}>{candidate.title || `主题 #${candidate.topic_id}`} · 读取预览</button>)}</div>}
-    {!active && <form onSubmit={e => { e.preventDefault(); const source = topic.trim(); void run('/memory-imports', { ...(/^\d+$/.test(source) ? { topic_id: Number(source) } : { topic_url: source }), max_tokens: budget }) }}>
-      <div className="field-grid"><label className="field">个人贴链接或 ID<input required value={topic} onChange={e => setTopic(e.target.value)} placeholder="粘贴论坛链接，或输入 11957"/></label><label className="field">单次 token 预算<input type="number" min="3000" max={admin ? 30000 : 12000} required value={budget} onChange={e => setBudget(Number(e.target.value))}/></label></div>
-      <button className="primary" disabled={busy || !topic}>读取预览（不调用模型）</button>
-    </form>}
-    {job && <div className="import-progress">
-      <div className="list-row"><strong>{labels[job.state] || job.state}</strong><small>本批模型用量 {job.tokens.toLocaleString()} token</small></div>
-      {job.config?.username && <><p><strong>@{job.config.username}</strong> · 用户 ID {job.config.user_id}<br/><a href={job.config.url} target="_blank" rel="noreferrer">{job.config.title || `个人贴 #${job.topic_id}`}</a></p>
-        <p className="muted">本批扫描 {job.config.scanned} 楼，其中作者原帖 {job.config.author_posts} 条；剩余 {job.config.remaining} 楼。{job.config.truncated > 0 && ` ${job.config.truncated} 条长帖只读取了开头，未覆盖全文。`}</p></>}
-      {job.state === 'preview' && <><p className="info-note">确认这是此人的个人贴。最多一次模型调用，保守预留 {job.config.reservation.toLocaleString()} token（含输出）；实际按提供方用量结算。不会给论坛发消息。</p><div className="form-actions"><button disabled={busy} onClick={() => run(`/memory-imports/${job.id}/cancel`)}>取消</button><button className="primary" disabled={busy} onClick={() => run(`/memory-imports/${job.id}/extract`)}>确认作者并提取</button></div></>}
-      {job.state === 'awaiting_save' && <><div className="import-facts">{job.result.facts.map((fact: Data, index: number) => <label className="import-fact" key={index}><input type="checkbox" checked={selected.includes(index)} onChange={e => setSelected(e.target.checked ? [...selected, index] : selected.filter(i => i !== index))}/><span><strong>{fact.text}</strong><blockquote>{fact.quote}</blockquote><small>来源帖子 #{fact.source_post_id}</small></span></label>)}</div><p className="muted">这些是模型候选，请排除玩笑、过时和有矛盾的内容。未选择的事实不会保存。</p><div className="form-actions"><button disabled={busy} onClick={() => run(`/memory-imports/${job.id}/cancel`)}>丢弃此批候选</button><button className="primary" disabled={busy} onClick={() => run(`/memory-imports/${job.id}/save`, { digest: job.result.digest, selected })}><Check size={16}/>保存 {selected.length} 条</button></div></>}
-      {['preparing', 'queued', 'running'].includes(job.state) && <p className="muted">正在处理这一批，失败不会自动重跑。<button disabled={busy} onClick={() => run(`/memory-imports/${job.id}/cancel`)}>停止</button></p>}
+    <div className="section-head"><div><h3><BookOpen size={18}/> {admin ? '从个人贴导入记忆' : '让猫从你的个人贴认识你'}</h3><p className="muted">选择个人贴，一键整理近期记忆。完成后可在下面查看、删除。</p></div><button className="icon-button" aria-label="刷新个人贴和导入进度" onClick={() => { void reload(); void discover() }}><RefreshCw size={16}/></button></div>
+    <p className="muted">仅限「個人帖」分类（#{savedCategory}）的公开主题。优先最新发言，跳过旧内容；一次最多 12,000 token{!admin && '，每日最多导入 3 次、20,000 token'}，仍受全站预算限制。查找不调用模型。</p>
+    {!active && <><div className="import-discovery"><p className="muted">{detected?.message || '正在查找你的个人贴…'}</p>{detected?.candidates?.map((candidate: Data) => <button key={candidate.topic_id} disabled={busy} onClick={() => { setTopic(String(candidate.topic_id)); void start(String(candidate.topic_id)) }}>{candidate.title || `主题 #${candidate.topic_id}`} · 一键导入</button>)}</div>
+      <details className="import-link" open={!detected?.candidates?.length}><summary>没有找到？使用个人贴链接</summary><form onSubmit={e => { e.preventDefault(); void start(topic.trim()) }}><label className="field">没有找到？粘贴个人贴链接<input required value={topic} onChange={e => setTopic(e.target.value)} placeholder="个人贴网址或主题 ID"/></label><button className="primary" disabled={busy || !topic.trim()}>一键导入近期记忆</button></form></details></>}
+    {job && <div className="import-progress"><div className="list-row"><strong>{labels[job.state] || job.state}</strong><small>本次已用 {job.tokens.toLocaleString()} token</small></div>
+      {job.config?.username && <><p><strong>@{job.config.username}</strong> · <a href={job.config.url} target="_blank" rel="noreferrer">{job.config.title || `个人贴 #${job.topic_id}`}</a></p><p className="muted">检查 {job.config.scanned} 楼，整理本人发言 {job.config.author_posts} 条。{job.config.recent && ` ${job.config.older_omitted} 条较早内容未纳入此次整理。`}{job.config.truncated > 0 && ` ${job.config.truncated} 条长发言读取了预算内开头。`}</p></>}
+      {['preparing', 'queued', 'running'].includes(job.state) && <p className="muted">完成后自动保存。AI 提取可能不准确，请在书架核对。<button disabled={busy} onClick={() => run(`/memory-imports/${job.id}/cancel`)}>停止</button></p>}
+      {job.state === 'preview' && <div className="form-actions"><button disabled={busy} onClick={() => run(`/memory-imports/${job.id}/cancel`)}>放弃上次导入</button><button disabled={busy} onClick={() => run(`/memory-imports/${job.id}/extract`)}>完成上次提取</button></div>}
+      {job.state === 'awaiting_save' && <div className="form-actions"><button disabled={busy} onClick={() => run(`/memory-imports/${job.id}/cancel`)}>丢弃上次候选</button><button disabled={busy} onClick={() => run(`/memory-imports/${job.id}/save`, { digest: job.result.digest, selected: job.result.facts.map((_: Data, i: number) => i) })}>保存上次候选到书架</button></div>}
       {job.reason && <p className="muted">{job.reason}</p>}
-      {!active && job.config?.remaining > 0 && <button disabled={busy} onClick={() => { setTopic(String(job.topic_id)); void run('/memory-imports', { topic_id: job.topic_id, max_tokens: budget }) }}>继续读取下一批</button>}
     </div>}
     {error && <p className="error" role="alert">{error}</p>}
+    {admin && <><details className="import-settings"><summary>个人贴来源设置</summary><label className="field">论坛分类 ID<input type="number" min="1" max="2147483647" value={category} onChange={e => setCategory(Number(e.target.value))}/></label></details><SaveDock dirty={dirty} busy={settingsBusy} error={settingsError} save={saveSettings} label="保存来源分类" idleLabel="来源分类已保存" detail="保存后立即用于查找与新导入"/></>}
   </section>
 }

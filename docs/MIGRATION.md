@@ -65,3 +65,13 @@ docker compose exec -T database dropdb -U suenmeow suenmeow_restore_check_exampl
 `tools/check_proxy.py` 在公开只读环境执行两次随机不存在账户的失败登录，核验伪造转发头被覆盖、两个请求落入同一真实来访地址桶，且不再使用网关共享桶。只输出布尔值，不输出原始 IP；不会重置其他人的限速计数。
 
 `tools/check_workspace.py --prepare --fixture-file /probe/fixture.json` 创建一个受限账户和两个专用模块；省略阶段参数检查 HTTP 权限、CSRF 和冲突；`--cleanup` 核对原模块/编排/发布版本，再移除模块并禁用测试账户。须在暂停/只读环境运行，挂载临时清单目录与 `/run/secrets/probe_admin_password`，或用 `--admin-password-file` 指定忽略的本地密码文件。清单包含临时密码，保持 0600 并禁止提交；这些检查不调用模型或论坛发送。
+
+## 近期一键导入升级（2026-10-05）
+
+显式 init 新增 `memory_import_settings`，默认分类 ID 22；不修改论坛身份、账户权限、21 个模块、发布 v3 或只读模式。新增配置无表结构变化。旧导入任务保留原预览/选择保存兼容流程，新建任务强制分类核验；未完成付费任务在 worker 重启后失效，不自动重试。新一键流程保存事实与游标同事务，水位推进到最新，近期窗口以外旧历史有意省略。
+
+升级前保存 `v2-before-recent-import-20261005.dump` 和匹配上一版源码的 `v2-code-before-recent-import-20261005.tar.gz`，均在受限备份目录、权限 0600。数据库归档已包含新增默认分类设置，应用仍是切换前版本。对应源码由前次已完成的自助版本归档复制，避免误把已上传新代码作为回滚代码。重建并验收后依次更新 API/worker/gateway；生产保持 read_only，重启重新建立论坛水位，不补发积压。
+
+完整 PostgreSQL 测试曾触发 test 容器 256 MiB 限额 OOM；仅提升测试容器至 512 MiB，API/worker 各 256 MiB、网关 64 MiB 保持原限额。回滚仍使用匹配代码和数据库重建，不依赖旧镜像标签；先停止新 worker，保持论坛发送关闭。
+
+部署后另存 `v2-after-recent-import-20261005.dump` 与 `v2-code-after-recent-import-20261005.tar.gz`（0600）。数据库归档的 `pg_restore --list` 检查通过；配套源码不包含 secrets、runtime 或依赖目录。新归档尚未重新执行完整隔离恢复，历史演练证据保持独立。

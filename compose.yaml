@@ -31,6 +31,7 @@ services:
       target: test
     image: suenmeow2-test:2.0.0
     command: [env, SUENMEOW_TEST_POSTGRES=1, python, -m, pytest, -q, -p, no:cacheprovider]
+    mem_limit: 512m
     restart: "no"
     profiles: [test]
   database:

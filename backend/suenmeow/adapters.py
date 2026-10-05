@@ -158,6 +158,14 @@ class Discourse:
         return [{"topic_id": post.get("topic_id"), "title": topics.get(post.get("topic_id"), "")}
                 for post in result.get("posts", [])[:20]]
 
+    async def personal_topics(self, user_id: int, category_id: int):
+        if user_id <= 0 or category_id <= 0:
+            raise ValueError("Verified author and category required")
+        # Numeric filters are trusted IDs, with exact category matching (no subcategories).
+        result = await self.search(f"user:{user_id} in:first category:={category_id} order:latest", 1)
+        return [{"topic_id": topic["id"], "title": topic.get("title", "")}
+                for topic in result.get("topics", [])[:20]]
+
     async def public_visible(self, topic: dict) -> bool:
         if topic.get("archetype") == "private_message":
             return False

@@ -280,6 +280,7 @@ class Database:
                 "identity_schema": {"version": 1},
                 "memory_import_lock": {}, "memory_import_schema": {"version": 1},
                 "memory_detect_cache": {},
+                "memory_import_settings": {"category_id": 22},
             }.items():
                 if not s.get(KV, key):
                     s.add(KV(key=key, data=data))

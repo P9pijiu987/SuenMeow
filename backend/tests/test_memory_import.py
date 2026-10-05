@@ -16,6 +16,7 @@ from suenmeow.worker import Worker
 class Forum:
     public = True
     private = False
+    category_id = 22
     posts = []
 
     def __init__(self, connection): self.connection = connection
@@ -23,8 +24,9 @@ class Forum:
     async def close(self): pass
     async def public_visible(self, topic): return self.public
     async def user_topics(self, username): return [{'topic_id': 42, 'title': '个人贴'}]
+    async def personal_topics(self, user_id, category_id): return [{'topic_id': 42, 'title': '个人贴'}]
     async def topic(self, topic_id, limit):
-        return {'id': topic_id, 'title': '个人贴', 'archetype': 'private_message' if self.private else 'regular',
+        return {'id': topic_id, 'category_id': self.category_id, 'title': '个人贴', 'archetype': 'private_message' if self.private else 'regular',
                 'post_stream': {'stream': [p['id'] for p in self.posts]}, 'context': self.posts[:1] + self.posts[-limit:]}
     async def selected_posts(self, topic_id, ids): return [p for p in self.posts if p['id'] in ids]
 
@@ -303,12 +305,12 @@ def test_editor_cannot_import_another_author_or_unverified_site(client, env, con
 def test_detection_cache_filters_private_topics_without_model(client, env, configured):
     bind_editor(client, env)
     calls = []
-    async def topics(self, username): calls.append(username); return [{'topic_id': 42, 'title': '个人贴'}]
-    configured.user_topics = topics
+    async def topics(self, user_id, category_id): calls.append((user_id, category_id)); return [{'topic_id': 42, 'title': '个人贴'}]
+    configured.personal_topics = topics
     configured.public = False
     assert client.get('/api/memory-imports/detect').json()['candidates'] == []
     assert client.get('/api/memory-imports/detect').json()['candidates'] == []
-    assert calls == ['alice']
+    assert calls == [(7, 22)]
     with env[1].transaction() as s: assert not list(s.scalars(select(Usage)))
 
 
@@ -339,3 +341,81 @@ async def test_personal_token_limit_is_checked_atomically_before_provider(client
     assert calls == []
     assert client.post(f"/api/memory-imports/{job['id']}/extract").status_code == 429
     await model.close()
+
+
+@pytest.mark.asyncio
+async def test_one_click_recent_auto_saves_then_delete_does_not_revive(client, env, configured):
+    bind_editor(client, env)
+    job = client.post('/api/memory-imports/start', json={'topic_id': 42}).json()
+    assert job['state'] == 'queued' and job['config']['recent'] and job['config']['remaining'] == 0
+    with env[1].transaction() as s:
+        row = s.get(MemoryImport, job['id']); row.state = 'running'
+        posts = json.loads(env[2].open(row.input_cipher)[1]['content'])['posts']
+        assert [p['id'] for p in posts] == [5, 1]
+    models = FakeModels()
+    await process_import(env[1], env[2], models, job['id'])
+    result = client.get('/api/memory-imports').json()[0]
+    assert result['state'] == 'saved' and result['result']['saved'] == 1 and models.calls == 1
+    memory = client.get('/api/records/memory').json()[0]
+    assert memory['data']['source_post_id'] == 5
+    assert client.delete('/api/records/memory/' + memory['id']).status_code == 200
+    again = client.post('/api/memory-imports/start', json={'topic_id': 42}).json()
+    with env[1].transaction() as s: s.get(MemoryImport, again['id']).state = 'running'
+    zero = FakeModels()
+    await process_import(env[1], env[2], zero, again['id'])
+    assert zero.calls == 0 and client.get('/api/records/memory').json() == []
+
+
+def test_category_filter_is_server_enforced_and_settings_admin_only(client, env, configured):
+    bind_editor(client, env)
+    configured.category_id = 23
+    assert client.get('/api/memory-imports/detect').json()['candidates'] == []
+    assert client.post('/api/memory-imports/start', json={'topic_id': 42}).status_code == 409
+    assert client.post('/api/memory-imports', json={'topic_id': 42}).status_code == 409
+    assert client.put('/api/memory-imports/settings', json={'category_id': 23}).status_code == 403
+    login(client)
+    assert client.put('/api/memory-imports/settings', json={'category_id': 23}).status_code == 200
+    assert client.post('/api/memory-imports/start', json={'topic_id': 42}).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_recent_budget_reads_newest_first_and_explicitly_omits_older(client, env, configured):
+    configured.posts = [post(i, text=f'我最近在照料盆栽{i}。' * 150) for i in range(1, 602)]
+    calls = []
+    async def selected(self, topic_id, ids): calls.append(ids); return [p for p in self.posts if p['id'] in ids]
+    configured.selected_posts = selected
+    job = client.post('/api/memory-imports/start', json={'topic_id': 42, 'max_tokens': 6000}).json()
+    assert job['state'] == 'queued' and job['config']['older_omitted'] > 590
+    assert job['config']['reservation'] <= 6000 and job['config']['last'] == 601
+    with env[1].transaction() as s:
+        posts = json.loads(env[2].open(s.get(MemoryImport, job['id']).input_cipher)[1]['content'])['posts']
+        assert posts[0]['id'] == 601 and all(p['id'] > 590 for p in posts)
+    assert len(calls) == 1 and calls[0][0] == 601
+
+
+@pytest.mark.asyncio
+async def test_auto_save_rechecks_source_visibility_before_cursor_or_facts(client, env, configured):
+    job = client.post('/api/memory-imports/start', json={'topic_id': 42}).json()
+    with env[1].transaction() as s: s.get(MemoryImport, job['id']).state = 'running'
+    class Changed(FakeModels):
+        async def complete(self, *args, **kwargs):
+            result = await super().complete(*args, **kwargs)
+            configured.public = False
+            return result
+    await process_import(env[1], env[2], Changed(), job['id'])
+    with env[1].transaction() as s:
+        assert s.get(MemoryImport, job['id']).state == 'failed'
+        assert not list(s.scalars(select(MemoryCursor))) and not list(s.scalars(select(Record).where(Record.kind == 'memory')))
+
+
+@pytest.mark.asyncio
+async def test_personal_topic_search_uses_stable_numeric_id_and_exact_category():
+    def forum(request):
+        assert request.url.path == '/search.json'
+        assert request.url.params['q'] == 'user:7 in:first category:=22 order:latest'
+        return httpx.Response(200, json={'topics': [{'id': 42, 'title': '个人贴'}]})
+    client = Discourse({'base_url': 'https://forum.example', 'username': 'cat'}, transport=httpx.MockTransport(forum))
+    try:
+        assert await client.personal_topics(7, 22) == [{'topic_id': 42, 'title': '个人贴'}]
+    finally:
+        await client.close()
