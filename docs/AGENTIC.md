@@ -172,3 +172,7 @@ A1、A2 可在模拟论坛中完成；A3 浏览器验收不发帖。真实论坛
 ## 提供方兼容核对
 
 2026-10-04 对照 [DeepSeek 思考模式文档](https://api-docs.deepseek.com/guides/thinking_mode/) 与 [Chat Completions 参数](https://api-docs.deepseek.com/api/create-chat-completion/)：`reasoning_effort=low` 是支持的参数，带工具调用的后续轮次应传回历史 `reasoning_content`。代码仅在任务内存中保留该载荷。文档核对不能代替真实长文验收；继续真实检查仍需把迁移 prompts 与必要论坛上下文发送给已配置的提供方。
+
+## 用户整帖阅读
+
+「整帖阅读」提供独立的全文导出与完整研究入口，所有已验证用户可用。它使用固定主题来源与人格、完整分段和分层总结；结果不自动进入管理员聊天或论坛发送队列。现有 Agent `topic_read` 仍是有界局部阅读工具，不能将该工具的结果宣称为整帖研究。详见 [TOPIC_READING.md](TOPIC_READING.md)。

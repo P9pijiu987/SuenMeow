@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 from sqlalchemy import select, func
 
-from .database import Account, AgentDraft, AgentTask, Audit, Event, KV, MemoryImport, Record, Reply, Snapshot, Usage, audit, day, locked, now
+from .database import Account, AgentDraft, AgentTask, Audit, Event, KV, MemoryImport, Record, Reply, Snapshot, TopicReview, Usage, audit, day, locked, now
 from .domain import AgentPolicy, Policy
 from .prompts import DEFAULTS
 
@@ -34,6 +34,15 @@ def seed(db, admin_id: str):
                 "memory": [ids["记忆整理"]], "summary": [ids["主题摘要"]],
                 "agent": [ids["主动研究"]],
             }
+        from .topic_review_prompts import SUMMARY, REVIEW
+        review = s.get(KV, 'topic_review_settings')
+        config = dict(review.data)
+        for key, title, content in [('summary_module', '整帖总结工作规则', SUMMARY), ('review_module', '整帖点评工作规则', REVIEW)]:
+            if not config[key]:
+                module = Record(kind='module', owner=admin_id, title=title,
+                                data={'content': content, 'persona': False, 'description': '整帖阅读专用；管理员发布后用于新任务'})
+                s.add(module); s.flush(); config[key] = module.id
+        review.data = config
 
 
 def publish(s, actor: str, note: str, source: dict | None = None):
@@ -92,9 +101,18 @@ def reserve(db, route: str, topic_id: int, tokens: int, policy: Policy, task_id=
         locked(s, "budget_lock")
         job = s.get(MemoryImport, task_id) if route == "memory" and task_id else None
         full_memory = bool(job and job.config.get("full"))
+        review_job = s.get(TopicReview, task_id) if task_id and topic_id == 0 else None
+        full_review = bool(review_job and review_job.config['mode'] == 'review' and route in ('summary', 'replyer'))
+        if review_job:
+            locked(s, 'topic_review_lock')
+            s.refresh(review_job)
+            from .topic_review import valid_job
+            if review_job.state != 'running':
+                raise BudgetExceeded('整帖任务已停止')
+            valid_job(s, review_job)
         total = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).where(Usage.day == day()))
         topic = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).where(Usage.day == day(), Usage.topic_id == topic_id))
-        if total + tokens > policy.daily_tokens or (not full_memory and topic + tokens > policy.topic_tokens):
+        if total + tokens > policy.daily_tokens or (not full_memory and not full_review and topic + tokens > policy.topic_tokens):
             raise BudgetExceeded("模型预算不足")
         if task_id and task_limit:
             used = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).where(Usage.task_id == task_id))

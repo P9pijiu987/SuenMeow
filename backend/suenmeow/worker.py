@@ -17,8 +17,9 @@ from .agent import AgentEngine, claim_task, interrupt_tasks
 from .database import AgentSource, AgentTask
 from .domain import AgentPolicy
 from .forum_auth import verify_forum_logins
-from .database import MemoryImport
+from .database import MemoryImport, TopicReview
 from .memory_import import process_import
+from .topic_review import process_review, interrupt_reviews, purge_expired
 from .memory import rank_facts
 from .topic_pipeline import resolve, overlay
 
@@ -58,6 +59,49 @@ class Worker:
         self.auth_version = 0
         self.last_auth_poll = 0
         self.import_job = None
+        self.review_job = None
+        self.last_review_cleanup = 0
+
+    async def dispatch_reviews(self):
+        if self.review_job and not self.review_job.done(): return
+        if self.review_job:
+            completed = self.review_job
+            self.review_job = None
+            await completed
+        if now() - self.last_review_cleanup > 3600:
+            purge_expired(self.db)
+            self.last_review_cleanup = now()
+        with self.db.transaction() as s:
+            locked(s, "topic_review_lock")
+            job = s.scalar(select(TopicReview).where(TopicReview.state == "queued", TopicReview.expires > now())
+                           .order_by(TopicReview.created).with_for_update(skip_locked=True))
+            if not job: return
+            job.state = "running"
+            job_id = job.id
+            routes = {}
+            if job.config["mode"] == "review":
+                for route in ("summary", "replyer"):
+                    row = s.get(KV, "connection:" + route)
+                    if row: routes[route] = self.vault.open(row.data["cipher"])
+        async def run():
+            models = None
+            try:
+                models = self.models_factory(self.db, routes)
+                async with asyncio.timeout(86400):
+                    await process_review(self.db, self.vault, models, job_id, self.forum_factory)
+            except TimeoutError:
+                with self.db.transaction() as s:
+                    job = s.get(TopicReview, job_id)
+                    if job and job.state in ('running', 'interrupted'):
+                        job.state, job.reason = 'failed', '任务超时；保留进度，不自动重试'
+            except Exception as exc:
+                with self.db.transaction() as s:
+                    job = s.get(TopicReview, job_id)
+                    if job and job.state == 'running':
+                        job.state, job.reason = 'failed', '处理初始化失败：' + type(exc).__name__
+            finally:
+                if models: await models.close()
+        self.review_job = asyncio.create_task(run())
 
     async def dispatch_import(self):
         if self.import_job and not self.import_job.done():
@@ -687,6 +731,7 @@ class Worker:
                 raise RuntimeError("Another SuenMeow worker is already running")
         mark_unknown(self.db)
         interrupt_tasks(self.db)
+        interrupt_reviews(self.db)
         with self.db.transaction() as s:
             for job in s.scalars(select(MemoryImport).where(MemoryImport.state.in_(["preparing", "queued", "running"]))):
                 job.state, job.reason = "interrupted", "worker 重启，未完成导入不自动重跑"
@@ -700,6 +745,7 @@ class Worker:
                     await self.dispatch_agents()
                     await self.poll_forum_auth()
                     await self.dispatch_import()
+                    await self.dispatch_reviews()
                     with self.db.transaction() as s:
                         control, snapshot = get_snapshot(s)
                     if control["mode"] == "paused" or not snapshot:
@@ -732,6 +778,9 @@ class Worker:
             if self.import_job:
                 self.import_job.cancel()
                 await asyncio.gather(self.import_job, return_exceptions=True)
+            if self.review_job:
+                self.review_job.cancel()
+                await asyncio.gather(self.review_job, return_exceptions=True)
             self.state("stopped", "worker 已停止")
             if self.forum:
                 await self.forum.close()

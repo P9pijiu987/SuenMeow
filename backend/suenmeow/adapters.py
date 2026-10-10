@@ -256,6 +256,19 @@ class Discourse:
                 for p in data.get("post_stream", {}).get("posts", []) if p.get("id") in post_ids and p.get("topic_id", topic_id) == topic_id
                 and p.get("post_type") == 1 and not p.get("hidden") and not p.get("deleted_at")]
 
+    async def full_posts(self, topic_id: int, post_ids: list[int]):
+        """Complete visible bodies, including Markdown links/quotes, for explicit topic reading."""
+        if topic_id <= 0 or not 1 <= len(post_ids) <= 20 or any(type(i) is not int or i <= 0 for i in post_ids):
+            raise ValueError('Invalid post selection')
+        data = await self.read(f'/t/{topic_id}/posts.json', [('include_raw', 'true'), *[('post_ids[]', i) for i in post_ids]])
+        result = []
+        for post in data.get('post_stream', {}).get('posts', []):
+            if (post.get('id') in post_ids and post.get('topic_id', topic_id) == topic_id and post.get('post_type') == 1
+                    and not post.get('hidden') and not post.get('deleted_at')):
+                result.append({**safe_post(post), 'body_format': 'markdown' if isinstance(post.get('raw'), str) else 'plain_text',
+                               'reply_to': post.get('reply_to_post_number')})
+        return result
+
     async def reply_limit(self):
         # Discourse preloads client settings into HTML; /site.json does not expose this field.
         response = await self.client.get("/latest", headers={"Accept": "text/html", "X-Requested-With": "",

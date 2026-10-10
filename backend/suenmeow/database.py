@@ -173,6 +173,40 @@ class MemoryImport(Base):
     result_cipher: Mapped[str] = mapped_column(Text, default="")
 
 
+class TopicReview(Base):
+    __tablename__ = "topic_reviews"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    owner: Mapped[str] = mapped_column(String(32), index=True)
+    topic_id: Mapped[int] = mapped_column(Integer, index=True)
+    state: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    created: Mapped[float] = mapped_column(Float, default=now)
+    expires: Mapped[float] = mapped_column(Float)
+    reason: Mapped[str] = mapped_column(String(300), default="")
+    config: Mapped[dict] = mapped_column(JSON)
+    checkpoint_cipher: Mapped[str] = mapped_column(Text, default="")
+    result_cipher: Mapped[str] = mapped_column(Text, default="")
+
+
+class TopicReviewPost(Base):
+    __tablename__ = "topic_review_posts"
+    __table_args__ = (UniqueConstraint("job_id", "post_id"), UniqueConstraint("job_id", "number"))
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    job_id: Mapped[str] = mapped_column(String(32), index=True)
+    post_id: Mapped[int] = mapped_column(Integer)
+    number: Mapped[int] = mapped_column(Integer)
+    content_cipher: Mapped[str] = mapped_column(Text)
+
+
+class TopicReviewPart(Base):
+    __tablename__ = "topic_review_parts"
+    __table_args__ = (UniqueConstraint("job_id", "level", "sequence"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    job_id: Mapped[str] = mapped_column(String(32), index=True)
+    level: Mapped[int] = mapped_column(Integer, default=0)
+    sequence: Mapped[int] = mapped_column(Integer)
+    content_cipher: Mapped[str] = mapped_column(Text)
+
+
 class MemoryCursor(Base):
     __tablename__ = "memory_cursors"
     __table_args__ = (UniqueConstraint("site", "topic_id"),)
@@ -304,6 +338,7 @@ class Database:
                 "memory_full_coverage": {}, "memory_tombstones": {}, "topic_pipeline_lock": {},
                 "topic_pipeline_settings": {"require_review": False},
                 "persona_publications": {},
+                "topic_review_lock": {}, "topic_review_settings": {"summary_module": "", "review_module": ""},
             }.items():
                 if not s.get(KV, key):
                     s.add(KV(key=key, data=data))

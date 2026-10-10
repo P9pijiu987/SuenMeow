@@ -550,4 +550,6 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     mount_topic_pipelines(app, db, vault, user, admin)
     mount_forum_auth(app, db, vault, settings, user, admin)
     mount_memory_import(app, db, vault, user)
+    from .topic_review import mount_topic_reviews
+    mount_topic_reviews(app, db, vault, user)
     return app
