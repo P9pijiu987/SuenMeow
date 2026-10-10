@@ -210,12 +210,14 @@ def send_reason(s, reply: Reply, event: Event, policy: Policy, timestamp: float)
         for record_id in task.constraints.get("memory_ids", []):
             if not s.get(Record, record_id):
                 return "Agent 引用的记忆已删除"
-    if event.data.get("nest_id"):
-        nest = s.get(Record, event.data["nest_id"])
-        source = event.data.get("source")
-        if not nest or nest.data.get("opted_out") or nest.data["topic_id"] != reply.topic_id:
+    if event.data.get("nest_id") or event.data.get("source") == "followup":
+        return "旧版个人猫窝已停用"
+    if event.data.get("cat_nest"):
+        from .cat_nest import active_config
+        home = active_config(s, event.data.get("nest_version"))
+        if not home or home["topic_id"] != reply.topic_id or event.data.get("private"):
             return "猫窝主动互动授权已撤销"
-        if not policy.playful or not nest.data.get("followup" if source == "followup" else "diary"):
+        if not policy.playful:
             return "猫窝主动互动已关闭"
     if quiet(policy, timestamp):
         return "安静时段"

@@ -38,6 +38,11 @@ def check():
             draft={k:persona[k] for k in ('id','title','data','version','grants')}
             call(editor,'POST','/prompts/workspace/save',{'modules':[draft]},403)
             call(editor,'POST','/prompts/workspace/save',{'pipeline':visible['pipeline'],'pipeline_version':visible['pipeline_version']},403)
+            nest=call(editor,'GET','/cat-nest')
+            assert nest == call(admin,'GET','/cat-nest')
+            call(editor,'PUT','/cat-nest',{'version':nest['version'],'topic_id':42},403)
+            call(editor,'GET','/records/nest',status=403)
+            call(editor,'POST','/records/nest',{'title':'forbidden','data':{'topic_id':42}},403)
             assert call(editor,'GET','/topic-pipelines')==[]
             assert call(editor,'GET','/topic-reviews')==[]
             call(editor,'POST','/topic-reviews',{'topic':'11957','mode':'export'},403)
@@ -53,7 +58,7 @@ def check():
             print(json.dumps({'https_shared_catalog':True,'personas_readable':sum(m['is_persona'] for m in visible['modules']),
                               'global_pipeline_readable':True,'shared_writes_rejected':403,'unverified_binding_rejected':403,
                               'csrf_rejected':403,'published_prompts_unchanged':True,'review_default_off':True,
-                              'review_settings_admin_only':True,'mode':'read_only','topic_review_identity_and_csrf_rejected':403,'model_calls':0,'forum_writes':0}))
+                              'review_settings_admin_only':True,'mode':'read_only','topic_review_identity_and_csrf_rejected':403,'single_cat_nest_readonly':True,'cat_nest_writes_rejected':403,'model_calls':0,'forum_writes':0}))
         finally:
             call(admin,'PUT','/accounts/'+account['id'],{'username':name,'password':'','role':'editor','active':False,'forum_username':''})
             call(admin,'POST','/auth/logout')

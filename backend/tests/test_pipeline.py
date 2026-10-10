@@ -132,27 +132,14 @@ async def test_small_hot_increments_accumulate(env):
     with env[1].transaction() as s: assert s.scalar(select(Event)).receipt == "hot:42:105"
 
 
-async def test_catnest_optout_no_diary_and_one_daily_receipt(env, monkeypatch):
-    epoch, version = activate(env)
+async def test_legacy_user_nests_never_generate_diaries(env, monkeypatch):
+    epoch, _ = activate(env)
     with env[1].transaction() as s:
-        p = Policy(playful=True, timezone="UTC").model_dump()
-        s.get(KV,"policy").data = p
+        s.get(KV, "policy").data = Policy(playful=True, timezone="UTC").model_dump()
         publish(s, env[3]["admin"], "play")
-        control,snapshot = get_snapshot(s); epoch=control["epoch"]
-        nest=Record(kind="nest",owner=env[3]["editor"],title="room",data={"topic_id":42,"forum_username":"human","diary":True,"private":False,"opted_out":True})
-        s.add(nest); s.flush(); nid=nest.id
-    import suenmeow.worker as module
-    class Midday(datetime):
-        @classmethod
-        def now(cls, tz=None): return cls(2026,10,3,12,0,tzinfo=timezone.utc)
-    monkeypatch.setattr(module, "datetime", Midday)
-    w=Worker(env[1],env[2]); w.epoch=epoch; w.forum=GoodForum()
+        control, snapshot = get_snapshot(s)
+        s.add(Record(kind="nest", owner=env[3]["editor"], title="legacy", data={"topic_id":42,"diary":True,"private":False}))
+    w = Worker(env[1], env[2]); w.epoch = control["epoch"]; w.forum = GoodForum()
     await w.playful(snapshot)
     with env[1].transaction() as s:
         assert not s.scalar(select(Event))
-        s.get(Record,nid).data={**s.get(Record,nid).data,"opted_out":False}
-    w.last_play=0; await w.playful(snapshot)
-    w.last_play=0; await w.playful(snapshot)
-    with env[1].transaction() as s:
-        assert len(list(s.scalars(select(Event)))) == 1
-        assert s.scalar(select(Event)).data["source"] == "diary"

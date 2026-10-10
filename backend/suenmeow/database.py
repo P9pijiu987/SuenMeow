@@ -338,7 +338,7 @@ class Database:
                 "memory_full_coverage": {}, "memory_tombstones": {}, "topic_pipeline_lock": {},
                 "topic_pipeline_settings": {"require_review": False},
                 "persona_publications": {},
-                "topic_review_lock": {}, "topic_review_settings": {"summary_module": "", "review_module": ""},
+                "cat_nest": {}, "topic_review_lock": {}, "topic_review_settings": {"summary_module": "", "review_module": ""},
             }.items():
                 if not s.get(KV, key):
                     s.add(KV(key=key, data=data))

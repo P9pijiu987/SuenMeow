@@ -10,7 +10,7 @@ import pyotp
 from sqlalchemy import delete, select
 
 from .database import Account, Audit, Database, Event, ForumIdentity, KV, LoginSession, Record, Reply, Snapshot, Usage, audit, locked, now
-from .domain import ForumConnection, ModeInput, ModuleData, NestData, Policy, RecordInput, Route, Strict
+from .domain import ForumConnection, ModeInput, ModuleData, Policy, RecordInput, Route, Strict
 from .security import DUMMY_HASH, Vault, client_address, digest, enforce_record, can_edit, password_hash, require_admin, same_token, verify_password
 from .service import ROUTES, dashboard, publish, set_mode
 from .settings import Settings
@@ -346,6 +346,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
         if kind not in ("module", "memory", "nest"):
             raise HTTPException(404, "类型不存在")
         with db.transaction() as s:
+            if kind == "nest":
+                require_admin(account)
             rows = s.scalars(visible_records(account, kind).limit(500))
             return [record_dict(r) for r in rows if can_edit(account, r)]
 
@@ -356,16 +358,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
             except ValidationError:
                 raise HTTPException(422, "提示词格式或长度不正确")
         if kind == "nest":
-            try:
-                result = NestData.model_validate(data).model_dump()
-            except ValidationError:
-                raise HTTPException(422, "猫窝格式不正确；需要有效的既有主题 ID")
-            if account.role != "admin":
-                if not account.forum_username or result["forum_username"] != account.forum_username:
-                    raise HTTPException(403, "管理员须先绑定你的论坛身份")
-                if result["private"] or result["followup"]:
-                    raise HTTPException(403, "私信绑定需要管理员核验")
-            return result
+            require_admin(account)
+            raise HTTPException(410, "旧版个人猫窝已停用，请使用 SuenMeow 专属猫窝设置")
         if kind == "memory":
             require_admin(account)  # Automatic personal facts can be viewed/deleted; behavior edits require admin.
             if len(str(data.get("text", ""))) > 10000 or data.get("scope") not in ("public", "private"):
@@ -393,6 +387,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
 
     @app.put("/api/records/{kind}/{record_id}")
     def edit_record(kind: str, record_id: str, body: RecordInput, account=Depends(user)):
+        if kind == "nest":
+            require_admin(account)
         with db.transaction() as s:
             if kind == "module":
                 locked(s, "editor_lock")
@@ -414,6 +410,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
 
     @app.delete("/api/records/{kind}/{record_id}")
     def remove_record(kind: str, record_id: str, account=Depends(user)):
+        if kind == "nest":
+            require_admin(account)
         with db.transaction() as s:
             if kind == "module":
                 locked(s, "editor_lock")
@@ -552,4 +550,6 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     mount_memory_import(app, db, vault, user)
     from .topic_review import mount_topic_reviews
     mount_topic_reviews(app, db, vault, user)
+    from .cat_nest import mount_cat_nest
+    mount_cat_nest(app, db, vault, user, admin)
     return app

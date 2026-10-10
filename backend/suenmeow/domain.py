@@ -85,30 +85,6 @@ class ModuleData(Strict):
     persona: bool = False
 
 
-class NestData(Strict):
-    topic_id: int = Field(gt=0)
-    forum_username: str = Field(default="", max_length=100)
-    private: bool = False
-    diary: bool = False
-    followup: bool = False
-    opted_out: bool = False
-    objects: list[dict] = Field(default_factory=list, max_length=30)
-    notes: str = Field(default="", max_length=4000)
-    activity: str = Field(default="", max_length=200)
-    progress: int = Field(0, ge=0, le=100)
-    mood: Literal["慵懒", "好奇", "轻快", "安静"] = "好奇"
-    energy: int = Field(60, ge=0, le=100)
-    mood_updated: float = Field(0, ge=0)
-
-    @field_validator("objects")
-    @classmethod
-    def room_objects(cls, v):
-        if any(set(x) - {"name", "note"} or not isinstance(x.get("name", ""), str) or not isinstance(x.get("note", ""), str)
-               or len(x.get("name", "")) > 80 or len(x.get("note", "")) > 300 for x in v):
-            raise ValueError("物件仅包含名称和说明")
-        return v
-
-
 class ModeInput(Strict):
     mode: Literal["paused", "read_only", "approval", "auto"]
 

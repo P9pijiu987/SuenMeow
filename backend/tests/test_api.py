@@ -97,7 +97,7 @@ def test_totp_enrollment_revokes_sessions(client, env):
     assert client.post("/api/auth/login", json={"username": "admin", "password": "strong-test-password"}).status_code == 401
 
 
-def test_personal_nest_identity_and_memory_isolation(client, env):
+def test_legacy_user_nest_disabled_and_memory_isolation(client, env):
     _, db, vault, ids = env
     with db.transaction() as s:
         s.add(Record(kind="memory", owner=ids["other"], title="private", data={"cipher": vault.seal({"text": "secret", "scope": "private"})}))
@@ -106,6 +106,6 @@ def test_personal_nest_identity_and_memory_isolation(client, env):
     body = {"title": "room", "data": {"topic_id": 123, "forum_username": "other-person"}}
     assert client.post("/api/records/nest", json=body).status_code == 403
     body["data"]["forum_username"] = "human"
-    assert client.post("/api/records/nest", json=body).status_code == 200
+    assert client.post("/api/records/nest", json=body).status_code == 403
     body["data"]["private"] = True
     assert client.post("/api/records/nest", json=body).status_code == 403
