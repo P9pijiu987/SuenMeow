@@ -79,8 +79,9 @@ docker compose up -d api worker gateway
 
 - [实施规格](docs/SPECIFICATION.md)
 - [Agentic 主动研究与管理员聊天设计](docs/AGENTIC.md)（实现与验收中）
-- [拟人回复与原生 reactions 改革](docs/INTERACTION.md)（协议 2 已实现，策略尚未发布）
-- [上线前现状与欠账](docs/READINESS.md)（已做、待实际验收、未实现分别列出）
+- [拟人回复与原生 reactions 改革](docs/INTERACTION.md)（已在自动模式运行，修复后自然效果持续核对）
+- [记忆检索与完整读取](docs/MEMORY_RETRIEVAL.md)（相关选段与 Agent 完整续读分开）
+- [运行现状与待修复问题](docs/READINESS.md)（已做、待实际验收、未实现分别列出）
 - [验收清单](docs/ACCEPTANCE.md)
 - [MacBook 迁移和回滚](docs/MIGRATION.md)
 
