@@ -1,6 +1,6 @@
 {
   "version": "2.0.0",
-  "status": "auto on prior release; incident fixes tested and images built; production switch awaits explicit confirmation after automatic approval rejection",
+  "status": "auto; incident repairs deployed and verified on original MacBook; cat nest off; natural conversation quality under observation",
   "verified_at": "2026-10-11",
   "verified_features": [
     "独立 FastAPI/PostgreSQL 服务、React 中文控制台已部署到原 MacBook，公开 HTTPS 可访问",
@@ -30,7 +30,8 @@
     "完整记忆工具设置与每页、累计、未完成和已读完提示通过界面模拟；1280px和390px均无横向溢出。正文长度、目标及扩展失败不再丢弃独立有效表情。",
     "2026-10-11: deployed and verified auto / snapshot 7 / epoch 24 / worker baseline 24; memory_read_all enabled; active modules and pipeline preserved; cat nest off. Reaction target 33%, uninvited reply sampling 3%; PostgreSQL final quota checks: 35 passed (22.96 seconds).",
     "最终分页隐私补丁 PostgreSQL 联合专项90通过（57.42秒）；续读重新核验来源可见性与原句，私密草稿不能引用其他后来变私密的来源。通过后更新API/worker，模式和快照不变。",
-    "本轮已实现可保存预算、原生图片输入、公开网络搜索、审核 Agent 修订、有界会话历史、同站链接研究、在用系统提示词保存即时生效、同次调用自动有来源记忆；最终部署记录见 ACCEPTANCE。"
+    "本轮已实现可保存预算、原生图片输入、公开网络搜索、审核 Agent 修订、有界会话历史、同站链接研究、在用系统提示词保存即时生效、同次调用自动有来源记忆；已更新原 MacBook，最终部署记录见 ACCEPTANCE。",
+    "2026-10-11 23:35 亚洲台北：用户明确允许更新现有服务后部署，四容器healthy、auto/快照7/epoch24、worker online/baseline24，全部生效模块与编排哈希一致、猫窝关闭、现有预算不变。HTTPS新预算鉴权/CSRF/退出及概览一致性通过，公开web_search启用、视觉路由支持确认，非请求式自动研究保持关闭；0模型调用或测试论坛写入。"
   ],
   "simulated_validation": [
     "整帖功能最终本地完整158通过/13项PostgreSQL跳过（33.73秒），MacBook完整PostgreSQL171通过（311.76秒，无跳过）；临时测试容器途中CPU调到2，正式服务限额不变。TypeScript/Vite、1280px/390px模拟GUI、一键自动Markdown下载和JSON完整文件验证通过。包括301楼/长文末尾/所有作者、逐层合并、缓存手动恢复、实际预算结算、取消/撤回/身份/CSRF/所有者/并发/过期。授权DeepSeek用4条虚构发言和原发布人格、新工作规则完成2调用/3340token协议验收，4条有效引用；生产模型任务和事实未写入，不冒充真实长帖质量验收",
@@ -47,7 +48,6 @@
     "最终 MacBook PostgreSQL 修订/提示词/互动专项94通过（188.09秒），概览预算修正后预算/鉴权/发送安全专项33通过（91.85秒）；最终同组本地33通过（5.63秒）。最终构建 index-D6s53D4f.js；1280px/390px模拟预算保存及未批准草稿修订无横向溢出。"
   ],
   "pending": [
-    "本轮预算/图片/网络/续聊/即时系统提示词/自动事实的新镜像尚未切换：自动审批拒绝服务更新，等待用户对此次现有生产服务更新的明确确认；已运行版本仍保留 auto/快照7/epoch24。",
     "用户已自行启用auto；修复后的真实回复频率、表情成功比例、目标语境与研究质量仍需自然观察，不能以模拟验收代替。",
     "指定既有主题并核对正文后的单条真实发送验收",
     "真实机器人猫窝主题绑定与日记质量验收（当前未配置关闭；旧猫窝私信跟进已撤下）",
