@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 from sqlalchemy import select, func
 
-from .database import Account, AgentDraft, AgentTask, Audit, Event, KV, MemoryImport, Record, Reply, Snapshot, TopicReview, Usage, audit, day, locked, now
+from .database import Account, AgentDraft, AgentTask, Audit, Event, KV, MemoryImport, Reaction, Record, Reply, Snapshot, TopicReview, Usage, audit, day, locked, now
 from .domain import AgentPolicy, Policy
 from .prompts import DEFAULTS
 
@@ -43,6 +43,13 @@ def seed(db, admin_id: str):
                                 data={'content': content, 'persona': False, 'description': '整帖阅读专用；管理员发布后用于新任务'})
                 s.add(module); s.flush(); config[key] = module.id
         review.data = config
+        if not s.get(KV, 'interaction_defaults'):
+            from .domain import InteractionPolicy
+            from .interaction_prompts import RULES
+            module = Record(kind='module', owner=admin_id, title='拟人互动工作规则',
+                            data={'content': RULES, 'persona': False, 'description': '协议 2 专用；配置草稿启用并发布后使用'})
+            s.add(module); s.flush()
+            s.add(KV(key='interaction_defaults', data=InteractionPolicy(rule_module=module.id).model_dump()))
 
 
 def publish(s, actor: str, note: str, source: dict | None = None):
@@ -50,11 +57,11 @@ def publish(s, actor: str, note: str, source: dict | None = None):
     locked(s, "pipeline")
     control = locked(s, "control")
     if source is None:
-        from .personas import publish_personas
+        from .personas import publish_personas, is_persona
         publish_personas(s, list(s.scalars(select(Record).where(Record.kind == 'module'))), actor, refresh_global=False)
         policy = Policy.model_validate(s.get(KV, "policy").data).model_dump()
         pipeline = s.get(KV, "pipeline").data
-        modules = {r.id: {"title": r.title, "content": r.data.get("content", ""), "persona": bool(r.data.get("persona")), "version": r.version}
+        modules = {r.id: {"title": r.title, "content": r.data.get("content", ""), "persona": is_persona(s, r), "version": r.version}
                    for r in s.scalars(select(Record).where(Record.kind == "module"))}
         for route in (*ROUTES, "agent"):
             order = pipeline.get(route, [])
@@ -62,6 +69,12 @@ def publish(s, actor: str, note: str, source: dict | None = None):
                 continue  # Older snapshots use the bounded built-in task guide.
             if not order or len(order) != len(set(order)) or any(x not in modules for x in order):
                 raise HTTPException(422, f"{route} 必须包含有效、不重复的提示词模块")
+        if policy['interaction']:
+            mid = policy['interaction']['rule_module']
+            record = s.get(Record, mid)
+            owner = s.get(Account, record.owner) if record else None
+            if not record or record.kind != 'module' or is_persona(s, record) or not owner or owner.role != 'admin' or not owner.active:
+                raise HTTPException(422, '互动工作规则必须选择在用管理员的系统提示词模块')
         source = {"policy": policy, "pipeline": pipeline, "modules": modules}
     snapshot = Snapshot(data=source, actor=actor, note=note[:300])
     s.add(snapshot)
@@ -86,6 +99,8 @@ def set_mode(s, mode: str, actor: str):
         # All prior drafts stay reviewable, but cannot be sent after a new baseline.
         for r in s.scalars(select(Reply).where(Reply.state.in_(["approval", "ready"]))):
             r.state, r.reason = "expired", "模式变化后需要新事件"
+        for r in s.scalars(select(Reaction).where(Reaction.state.in_(['approval', 'ready']))):
+            r.state, r.reason = 'expired', '模式变化后需要新事件'
         audit(s, actor, "mode", mode)
     return control.data
 
@@ -174,6 +189,11 @@ def send_reason(s, reply: Reply, event: Event, policy: Policy, timestamp: float)
         return "回复不可发送"
     if reply.topic_id <= 0 or reply.topic_id != event.topic_id:
         return "只能回复既有主题"
+    if policy.interaction and event.receipt.startswith('interaction:'):
+        from .interactions import reply_allowance
+        reason = reply_allowance(s, event.topic_id, event.data.get('reply_user_id', 0), policy.interaction,
+                                 timestamp, exclude_id=reply.id)
+        if reason: return reason
     from .topic_pipeline import pin_valid
     if not pin_valid(s, event.data.get("topic_pipeline")):
         return "个人贴编排已停用、重新发布或身份变化，旧草稿已过期"
@@ -196,8 +216,11 @@ def send_reason(s, reply: Reply, event: Event, policy: Policy, timestamp: float)
         if event.data.get("char_count", 0) > min(agent_policy.max_chars, task.constraints["max_chars"], task.constraints.get("forum_limit", 0)):
             return "Agent 回复超过当前长度限制"
         for record_id in task.constraints.get("memory_ids", []):
-            if not s.get(Record, record_id):
+            memory = s.get(Record, record_id)
+            if not memory:
                 return "Agent 引用的记忆已删除"
+            if record_id in task.constraints.get("memory_versions", {}) and memory.version != task.constraints["memory_versions"][record_id]:
+                return "Agent 引用的记忆已修改，需要重新研究"
     if reply.topic_id in policy.muted_topics or event.data.get("username", "") in policy.muted_users:
         return "主题或用户已静音"
     if event.data.get("research_task"):
@@ -208,8 +231,11 @@ def send_reason(s, reply: Reply, event: Event, policy: Policy, timestamp: float)
         if task.constraints.get("forum_version", 0) != (connection.version if connection else 0):
             return "Agent 研究来源连接已变化"
         for record_id in task.constraints.get("memory_ids", []):
-            if not s.get(Record, record_id):
+            memory = s.get(Record, record_id)
+            if not memory:
                 return "Agent 引用的记忆已删除"
+            if record_id in task.constraints.get("memory_versions", {}) and memory.version != task.constraints["memory_versions"][record_id]:
+                return "Agent 引用的记忆已修改，需要重新研究"
     if event.data.get("nest_id") or event.data.get("source") == "followup":
         return "旧版个人猫窝已停用"
     if event.data.get("cat_nest"):
@@ -222,6 +248,8 @@ def send_reason(s, reply: Reply, event: Event, policy: Policy, timestamp: float)
     if quiet(policy, timestamp):
         return "安静时段"
     gate = s.get(KV, "gate").data
+    if policy.interaction and timestamp - gate.get('last_write', gate.get('last_send', 0)) < policy.interaction.write_interval:
+        return '共享写入间隔中'
     if timestamp - gate.get("last_send", 0) < policy.global_cooldown:
         return "全局冷却中"
     if timestamp - gate.get("topics", {}).get(str(reply.topic_id), 0) < policy.topic_cooldown:
@@ -249,7 +277,8 @@ def claim_send(db, reply_id: str, timestamp=None):
                     r.state, e.state = "expired", "expired"
                 return None
         r.state, r.updated, r.reason = "sending", timestamp, "已预留发送；中断后需核实"
-        gate.data = {"last_send": timestamp, "topics": {**gate.data.get("topics", {}), str(r.topic_id): timestamp}}
+        gate.data = {**gate.data, "last_send": timestamp, "last_write": timestamp,
+                     "topics": {**gate.data.get("topics", {}), str(r.topic_id): timestamp}}
         audit(s, "worker", "send_claim", r.id, topic_id=r.topic_id)
         return {"id": r.id, "event_id": e.id, "topic_id": r.topic_id, "text_cipher": r.text_cipher,
                 "reply_to": e.data.get("post_number"), "private": e.data.get("private", False)}
@@ -257,6 +286,8 @@ def claim_send(db, reply_id: str, timestamp=None):
 
 def mark_unknown(db):
     with db.transaction() as s:
+        for r in s.scalars(select(Reaction).where(Reaction.state == 'sending')):
+            r.state, r.reason = 'unknown', '写入过程中中断，不重试 toggle'
         for r in s.scalars(select(Reply).where(Reply.state == "sending")):
             r.state, r.reason = "unknown", "发送过程中进程中断，请在论坛核实；不会自动重发"
             s.get(Event, r.event_id).state = "unknown"

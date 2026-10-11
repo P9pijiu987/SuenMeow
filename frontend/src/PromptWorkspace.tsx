@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, Cat, Copy, FileText, Plus, RefreshCw, Trash2, X } f
 import { api, type Data } from './api'
 import { SaveDock, useDraftSafety } from './DraftSafety'
 import { ReviewSettings } from './ReviewSettings'
+import { GrantPicker } from './GrantPicker'
 
 const routes: Record<string, string> = { planner: '参与规划', replyer: '回复生成', memory: '记忆整理', summary: '主题摘要', agent: '主动研究' }
 const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
@@ -84,7 +85,7 @@ export function PromptWorkspace({ user, act }: { user: Data, act: Action }) {
           <label className="field"><span>用途说明</span><input maxLength={500} value={current.data.description} onChange={e => update({ data: { ...current.data, description: e.target.value } })}/></label>
           <label className="toggle-row"><span><strong>这是一个人格模块</strong><small>人格向所有登录用户只读共享；旧版角色保留原始标记</small></span><input type="checkbox" disabled={!!current.legacy_persona} checked={persona(current)} onChange={e => update({ data: { ...current.data, persona: e.target.checked } })}/></label>
           <label className="field prompt-content"><span>提示词内容 <small>{current.data.content.length.toLocaleString()} / 50,000</small></span><textarea className="code-editor" rows={20} maxLength={50000} value={current.data.content} onChange={e => update({ data: { ...current.data, content: e.target.value } })}/><small>支持 Markdown。切换模块不会丢失尚未保存的内容。</small></label>
-          {admin && <details className="prompt-grants"><summary>编辑授权 · {current.grants.length} 个账户</summary><p>被授权者可修改此模块，不能转授权限。人格是否需要审核由上方开关控制；系统提示词仍需管理员发布。</p><div className="grants">{base.accounts.map((a: Data) => <label key={a.id}><input type="checkbox" disabled={!a.active && !current.grants.includes(a.id)} checked={current.grants.includes(a.id)} onChange={e => update({ grants: e.target.checked ? [...current.grants, a.id] : current.grants.filter((id: string) => id !== a.id) })}/>{a.username}{!a.active && '（已停用）'}</label>)}{!base.accounts.length && <small>还没有编辑者账户</small>}</div></details>}
+          {admin && <GrantPicker key={current.id} accounts={base.accounts} grants={current.grants} onChange={grants => update({ grants })}/>}
           {current.id.startsWith('new-') && <button type="button" onClick={() => {
             setModules(modules.filter(m => m.id !== current.id)); setSelected(modules.find(m => m.id !== current.id)?.id || '')
             if (pipeline) setPipeline(Object.fromEntries(Object.entries(pipeline).map(([key, ids]) => [key, ids.filter((id: string) => id !== current.id)])))

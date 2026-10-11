@@ -108,6 +108,9 @@ def safe_post(post: dict) -> dict:
         own = "\n".join(line for line in "".join(fragments).splitlines() if not line.lstrip().startswith(">"))
     return {"id": post["id"], "number": post.get("post_number", 0), "username": post.get("username", ""),
             "user_id": post.get("user_id"), "text": sanitized, "author_text": private_identity_text(own).strip(), "created": post.get("created_at"),
+            "reply_to": post.get("reply_to_post_number") or 0,
+            "reply_to_username": (post.get("reply_to_user") or {}).get("username", ""),
+            "reply_to_user_id": (post.get("reply_to_user") or {}).get("id") or 0,
             "has_quotes": quoted,
             "identity_message": sanitized != text}
 
@@ -130,6 +133,7 @@ class Discourse:
     def __init__(self, connection: dict, transport=None):
         self.connection = connection
         self.csrf = ""
+        self.bot_id = 0
         self.client = httpx.AsyncClient(base_url=connection["base_url"], timeout=30,
                                        transport=transport, follow_redirects=False,
                                        headers={"Accept": "application/json", "User-Agent": "SuenMeow/2.0",
@@ -148,6 +152,7 @@ class Discourse:
             current = await self.read("/session/current.json")
             if current.get("current_user", {}).get("username", "").casefold() != self.connection["username"].casefold():
                 raise LoginRequired("Forum API identity not verified")
+            self.bot_id = current['current_user'].get('id', 0)
             return
         # Discourse deployments can require establishing cookies before obtaining CSRF.
         await self.client.get("/session/passkey/challenge.json")
@@ -164,6 +169,7 @@ class Discourse:
         current = await self.read("/session/current.json")
         if current.get("current_user", {}).get("username", "").casefold() != self.connection["username"].casefold():
             raise LoginRequired("Forum identity not verified")
+        self.bot_id = current['current_user'].get('id', 0)
 
     async def read(self, path: str, params=None):
         r = await self.client.get(path, params=params)
@@ -180,13 +186,34 @@ class Discourse:
     async def latest(self):
         return (await self.read("/latest.json")).get("topic_list", {}).get("topics", [])
 
+    async def latest_posts(self, before=None):
+        data = await self.read('/posts.json', {'before': before} if before else None)
+        return data.get('latest_posts', [])
+
+    async def reaction_post(self, post_id):
+        if type(post_id) is not int or post_id <= 0:
+            raise ValueError('Existing post ID required')
+        return await self.read(f'/posts/{post_id}.json')
+
+    async def react(self, post_id, emoji):
+        if type(post_id) is not int or post_id <= 0 or not re.fullmatch(r'[A-Za-z0-9_+:-]{1,100}', emoji):
+            raise ValueError('Invalid reaction target')
+        response = await self.client.put(f'/discourse-reactions/posts/{post_id}/custom-reactions/{emoji}/toggle.json')
+        response.raise_for_status()  # Toggle: callers claim once and never retry any HTTP error.
+        return response.json()
+
     async def search(self, query: str, page=1):
         if not 1 <= page <= 3 or len(query) > 300:
             raise ValueError("Search limits exceeded")
         return await self.read("/search.json", {"q": query, "page": page})
 
     async def user_activity(self, username: str):
-        return (await self.read("/user_actions.json", {"username": username, "filter": "5", "limit": 20})).get("user_actions", [])
+        try:
+            return (await self.read("/user_actions.json", {"username": username, "filter": "5", "limit": 20})).get("user_actions", [])
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404: raise
+        if not re.fullmatch(r"[\w.\-]{1,100}", username): return []
+        return (await self.search(f"@{username} order:latest", 1)).get('posts', [])
 
     async def user_topics(self, username: str):
         try:
@@ -239,7 +266,7 @@ class Discourse:
         stream = data.get("post_stream", {}).get("stream", [])
         ids = list(dict.fromkeys(stream[:1] + stream[-limit:]))
         if ids:
-            result = await self.read(f"/t/{topic_id}/posts.json", [("post_ids[]", i) for i in ids])
+            result = await self.read(f"/t/{topic_id}/posts.json", [('include_raw', 'true'), *[("post_ids[]", i) for i in ids]])
             posts = result.get("post_stream", {}).get("posts", [])
         else:
             posts = data.get("post_stream", {}).get("posts", [])
@@ -251,7 +278,7 @@ class Discourse:
     async def selected_posts(self, topic_id: int, post_ids: list[int]):
         if topic_id <= 0 or not 1 <= len(post_ids) <= 20 or any(i <= 0 for i in post_ids):
             raise ValueError("Invalid post selection")
-        data = await self.read(f"/t/{topic_id}/posts.json", [("post_ids[]", i) for i in post_ids])
+        data = await self.read(f"/t/{topic_id}/posts.json", [('include_raw', 'true'), *[("post_ids[]", i) for i in post_ids]])
         return [safe_post(p)
                 for p in data.get("post_stream", {}).get("posts", []) if p.get("id") in post_ids and p.get("topic_id", topic_id) == topic_id
                 and p.get("post_type") == 1 and not p.get("hidden") and not p.get("deleted_at")]

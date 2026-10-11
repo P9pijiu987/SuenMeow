@@ -80,6 +80,16 @@ fieldset { padding: 0; margin: 0; border: 0; min-width: 0; }
 .prompt-grants { padding: 15px 0; border-top: 1px solid var(--line); }
 .prompt-grants summary { cursor: pointer; font-size: 12px; }
 .prompt-grants p { font-size: 11px; }
+.grant-toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+.grant-toolbar input { min-width: 0; }
+.grant-toolbar button { flex-shrink: 0; }
+.grant-accounts { display: grid; gap: 8px; }
+.grant-account { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+.grant-account input, .grant-account .account-avatar { flex-shrink: 0; }
+.grant-account strong, .grant-account small { display: block; }
+.grant-account strong { font-size: 13px; }
+.grant-account small { color: var(--muted); }
+.reaction-item { border-top: 1px solid var(--line); padding-top: 16px; margin-top: 16px; }
 .prompt-routing h3 { font-size: 15px; }
 .prompt-routing p { font-size: 11px; line-height: 1.7; }
 .prompt-routing h4 { font-size: 12px; font-weight: 500; margin: 24px 0 13px; }

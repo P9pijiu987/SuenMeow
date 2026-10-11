@@ -42,3 +42,15 @@ async def test_personal_fact_site_boundary_and_source_edit_are_rechecked(env):
                 'topic_id': 42, 'scope': 'public', 'source_post_id': 12, 'quote': quote})}))
     worker = Worker(db, vault); worker.forum = PublicForum()
     assert await worker.checked_memories(99, False, {'alice'}, {7}, query='薄荷') == []
+
+
+async def test_private_automatic_facts_require_same_site_even_with_same_topic_and_name(env):
+    _, db, vault, ids = env
+    with db.transaction() as s:
+        for site in ['', 'https://old.example', 'https://forum.example']:
+            s.add(Record(kind='memory', owner=ids['editor'], title='私信事实', data={'cipher': vault.seal({
+                'text': '薄荷私信事实', 'username': 'alice', 'site': site, 'scope': 'private',
+                'origin': 'automatic_fact', 'topic_id': 41, 'source_post_id': 12})}))
+    worker = Worker(db, vault); worker.forum = PublicForum()
+    facts = await worker.checked_memories(41, True, {'alice'}, {7}, query='薄荷')
+    assert len(facts) == 1

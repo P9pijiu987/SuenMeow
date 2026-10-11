@@ -2,6 +2,9 @@
 import asyncio
 import json
 import re
+import uuid
+
+import httpx
 
 from fastapi import HTTPException
 from pydantic import Field, ValidationError
@@ -14,6 +17,8 @@ from .security import digest, same_token
 from .prompts import AGENT
 from .adapters import source_text
 from .topic_pipeline import resolve, overlay, pin_valid
+from .memory_access import in_scope, matches, source_matches
+from .service import BudgetExceeded
 
 TERMINAL = {"completed", "awaiting_confirmation", "failed", "cancelled", "expired", "interrupted"}
 
@@ -39,6 +44,13 @@ class MemoryArgs(Strict):
     topic_id: int = Field(0, ge=0)
 
 
+class AllMemoryArgs(Strict):
+    username: str = Field(min_length=1, max_length=100, pattern=r"^[\w.-]+$")
+    user_id: int = Field(0, ge=0)
+    cursor: str = Field("", max_length=32, pattern=r"^[a-f0-9]*$")
+    limit: int = Field(50, ge=1, le=100)
+
+
 class ReleaseArgs(Strict):
     pass
 
@@ -53,6 +65,7 @@ TOOLS = {
     "forum_read_topic": (TopicArgs, "读取一个既有主题的最多 20 帖，或选择其中的帖子 ID。"),
     "forum_user_activity": (UserArgs, "查找指定用户最近的公开回复及其来源。"),
     "memory_lookup": (MemoryArgs, "按用户、主题或关键词检索有来源的相关事实。"),
+    "memory_read_all": (AllMemoryArgs, "读取指定用户全部有来源的记忆，不按关键词筛选。首次 cursor 为空；用返回的 next_cursor 继续，直到 complete=true。每页最多 100 条，仍受权限、主题数、步骤和预算限制。complete=false 时不能声称已读完；total=null 表示总数尚未核实。"),
     "release_describe": (ReleaseArgs, "读取当前运行版本的已验证发布信息，不能把计划当成已上线。"),
     "draft_reply": (DraftArgs, "完成草稿，source_ids 仅可引用本任务实际读取的来源；此工具不会发送。"),
 }
@@ -187,6 +200,7 @@ class AgentEngine:
         self.topics, self.denied = {}, set()
         self.seen_calls, self.search_pages, self.steps = set(), set(), 0
         self.deadline = 0
+        self.memory_cursors, self.memory_catalogs, self.memory_posts = {}, {}, {}
 
     def check(self):
         with self.db.transaction() as s:
@@ -207,7 +221,9 @@ class AgentEngine:
             if task.constraints.get("origin") == "forum":
                 control = s.get(KV, "control").data
                 event = s.get(Event, task.constraints["event_id"])
-                if not current.auto_research or not event or event.expires <= now() or event.epoch != control["epoch"] or control["mode"] in ("paused", "read_only"):
+                explicit_memory = (task.constraints.get("explicit_memory_request") and
+                                   set(task.constraints["policy"]["allowed_tools"]) <= {"memory_lookup", "memory_read_all", "forum_read_topic"})
+                if (not current.auto_research and not explicit_memory) or not event or event.expires <= now() or event.epoch != control["epoch"] or control["mode"] in ("paused", "read_only"):
                     raise AgentStopped("论坛事件或自动研究权限已变化")
             if hasattr(self, "policy"):
                 for key in ["max_steps", "max_topics", "max_tokens", "max_chars", "max_seconds"]:
@@ -316,44 +332,27 @@ class AgentEngine:
         if name == "forum_user_activity":
             return {"results": await self.candidates(await self.forum.user_activity(body.username))}
         if name == "memory_lookup":
+            self.reading_memory_tool = name
             if not (body.username or body.keyword or body.topic_id):
                 raise ValueError("请指定用户、主题或关键词")
-            with self.db.transaction() as s:
-                records = list(s.scalars(select(Record).where(Record.kind == "memory").order_by(Record.updated.desc()).limit(500)))
-            result = []
-            for row in records:
-                fact = self.vault.open(row.data["cipher"])
-                if body.username and fact.get("username", "").casefold() != body.username.casefold():
-                    continue
-                if body.topic_id and fact.get("topic_id") != body.topic_id:
-                    continue
-                if body.keyword and body.keyword.casefold() not in fact.get("text", "").casefold():
-                    continue
-                if fact.get("scope") != "public" and (not self.constraints["private"] or fact.get("topic_id") != self.constraints["target_topic"]):
-                    continue
+            records = self.memory_catalog(body)
+            self.memory_window = records[:100]
+            facts = []
+            for record_id, version in records:
                 try:
-                    topic = await self.topic(int(fact.get("topic_id") or 0))
-                    pid = int(fact.get("source_post_id") or 0)
-                    if pid not in topic.get("post_stream", {}).get("stream", []):
-                        continue
-                    posts = [p for p in topic["context"] if p["id"] == pid] or await self.forum.selected_posts(topic["id"], [pid])
-                    if not posts:
-                        continue
-                    if fact.get("origin") == "personal_topic" and (fact.get("site") != self.forum.connection["base_url"] or
-                            not any(p.get("user_id") == fact.get("forum_user_id") and not p.get("identity_message")
-                                    and fact.get("quote", "") in source_text(p) for p in posts)):
-                        continue
-                    source = self.source(topic, posts[0])
-                    self.constraints["memory_ids"] = list(dict.fromkeys([*self.constraints.get("memory_ids", []), row.id]))
-                    with self.db.transaction() as s:
-                        s.get(AgentTask, self.task_id).constraints = dict(self.constraints)
-                    result.append({"memory_id": row.id, "text": fact["text"][:600], "updated": row.updated,
-                                   "source_id": source["source_id"], "username": fact.get("username", "")})
+                    item = await self.memory_fact(record_id, version, body)
                 except ValueError:
                     continue
-                if len(result) >= 6:
+                if item:
+                    facts.append(item)
+                if len(facts) >= 6:
                     break
-            return {"facts": result}
+            self.pin_memories(facts)
+            return {"facts": [self.memory_result(fact) for fact in facts], "complete": False, "total": None,
+                    "instruction": "这是相关记忆的少量检索结果，不代表该用户记忆总数。需要全部时使用 memory_read_all。"}
+        if name == "memory_read_all":
+            self.reading_memory_tool = name
+            return await self.read_all_memories(body)
         if name == "release_describe":
             with self.db.transaction() as s:
                 record = s.get(KV, "release_verified")
@@ -362,6 +361,162 @@ class AgentEngine:
         if name == "draft_reply":
             return self.make_draft(body)
         raise ValueError("未知工具")
+
+    def memory_catalog(self, body):
+        """Freeze IDs and versions only; never place the whole bookshelf in model context."""
+        result = []
+        site = self.forum.connection["base_url"]
+        with self.db.transaction() as s:
+            rows = s.scalars(select(Record).where(Record.kind == "memory")
+                             .order_by(Record.updated.desc(), Record.id).execution_options(yield_per=256))
+            for index, row in enumerate(rows):
+                if index % 256 == 0:
+                    self.check()
+                fact = self.vault.open(row.data["cipher"])
+                if in_scope(fact, site, self.constraints["private"], self.constraints["target_topic"]) and matches(
+                        fact, body.username, getattr(body, "user_id", 0),
+                        getattr(body, "topic_id", 0), getattr(body, "keyword", "")):
+                    result.append((row.id, row.version))
+        return result
+
+    async def memory_fact(self, record_id, version, body):
+        self.check()
+        if self.reading_memory_tool not in self.policy.allowed_tools:
+            raise AgentStopped("记忆工具权限已撤销")
+        with self.db.transaction() as s:
+            row = s.get(Record, record_id)
+            if not row or row.kind != "memory" or row.version != version:
+                return None
+            fact = self.vault.open(row.data["cipher"])
+        if not in_scope(fact, self.forum.connection["base_url"], self.constraints["private"], self.constraints["target_topic"]) or not matches(
+                fact, body.username, getattr(body, "user_id", 0), getattr(body, "topic_id", 0), getattr(body, "keyword", "")):
+            return None
+        topic = await self.topic(fact["topic_id"])
+        pid = fact.get("source_post_id")
+        if type(pid) is not int or pid <= 0 or pid not in topic.get("post_stream", {}).get("stream", []):
+            return None
+        key = (topic["id"], pid)
+        if key not in self.memory_posts:
+            posts = [p for p in topic["context"] if p["id"] == pid]
+            if not posts:
+                # Gather at most 20 source IDs from this page. One forum request can verify
+                # many facts without loading unrelated topics or sending full posts to the model.
+                ids = [pid]
+                window = getattr(self, "memory_window", [])
+                with self.db.transaction() as s:
+                    for candidate in s.scalars(select(Record).where(Record.id.in_([rid for rid, _ in window]))):
+                        data = self.vault.open(candidate.data["cipher"])
+                        other = data.get("source_post_id")
+                        if (data.get("topic_id") == topic["id"] and type(other) is int and
+                                other in topic.get("post_stream", {}).get("stream", []) and other not in ids and
+                                (topic["id"], other) not in self.memory_posts and
+                                in_scope(data, self.forum.connection["base_url"], self.constraints["private"], self.constraints["target_topic"]) and
+                                matches(data, body.username, getattr(body, "user_id", 0), getattr(body, "topic_id", 0), getattr(body, "keyword", ""))):
+                            ids.append(other)
+                        if len(ids) == 20:
+                            break
+                posts = await self.forum.selected_posts(topic["id"], ids)
+                for source_id in ids:
+                    self.memory_posts[(topic["id"], source_id)] = next((p for p in posts if p.get("id") == source_id), None)
+            else:
+                self.memory_posts[key] = posts[0]
+        post = self.memory_posts[key]
+        self.check()
+        if self.reading_memory_tool not in self.policy.allowed_tools:
+            raise AgentStopped("记忆工具权限已撤销")
+        if not post or not source_matches(fact, post, source_text):
+            return None
+        if getattr(body, "user_id", 0) and body.username.casefold() not in {
+                fact.get("username", "").casefold(), post.get("username", "").casefold()}:
+            return None  # An arbitrary username plus someone else's ID cannot relabel their facts.
+        text = fact.get("text", "")
+        if not isinstance(text, str) or not 0 < len(text) <= 2000:
+            return None
+        source = self.source(topic, post)
+        return {"memory_id": row.id, "version": row.version, "text": text, "updated": row.updated,
+                "source_id": source["source_id"], "username": fact.get("username", "")}
+
+    def pin_memories(self, facts):
+        if not facts:
+            return
+        self.check()
+        self.constraints["memory_ids"] = list(dict.fromkeys([*self.constraints.get("memory_ids", []),
+                                                            *(fact["memory_id"] for fact in facts)]))
+        self.constraints["memory_versions"] = {**self.constraints.get("memory_versions", {}),
+                                               **{fact["memory_id"]: fact["version"] for fact in facts}}
+        with self.db.transaction() as s:
+            s.get(AgentTask, self.task_id).constraints = dict(self.constraints)
+
+    @staticmethod
+    def memory_result(fact):
+        # Versions and timestamps remain in server-side pins/audit. Repeating them
+        # in every model turn spends budget without adding evidence to the fact.
+        return {key: value for key, value in fact.items() if key not in ("version", "updated")}
+
+    async def read_all_memories(self, body):
+        identity = (body.username.casefold(), body.user_id)
+        if body.cursor:
+            state = self.memory_cursors.get(body.cursor)
+            if not state or state["identity"] != identity:
+                raise ValueError("记忆续读位置不属于本任务或用户")
+            self.memory_cursors.pop(body.cursor)
+        else:
+            if identity in self.memory_catalogs:
+                raise ValueError("该用户已开始完整读取，请使用 next_cursor 继续")
+            state = {"identity": identity, "records": self.memory_catalog(body), "position": 0,
+                     "read_count": 0, "as_of": now()}
+            self.memory_catalogs[identity] = state
+        facts, size, checked, blocked = [], 0, 0, ""
+        self.memory_window = state["records"][state["position"]:state["position"] + body.limit]
+        while state["position"] < len(state["records"]) and checked < body.limit:
+            self.check()
+            if "memory_read_all" not in self.policy.allowed_tools:
+                raise AgentStopped("完整读取记忆的工具权限已撤销")
+            rid, version = state["records"][state["position"]]
+            try:
+                item = await self.memory_fact(rid, version, body)
+            except ValueError as exc:
+                if str(exc) == "读取主题数量已达上限":
+                    blocked = "本任务读取主题数量已达上限，尚未读完；可提高研究策略上限后重新研究。"
+                    break
+                item = None  # Forbidden/deleted sources never disclose text, titles or counts.
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 404:
+                    blocked = "部分来源暂时无法核验，尚未读完；不把已有结果当作全部。"
+                    break
+                item = None
+            except httpx.RequestError:
+                blocked = "核验来源时网络不可用，尚未读完。"
+                break
+            if item:
+                item_size = len(json.dumps(self.memory_result(item), ensure_ascii=False).encode())
+                if size + item_size > 40000:
+                    break
+                size += item_size
+                facts.append(item)
+            state["position"] += 1
+            checked += 1
+        state["read_count"] += len(facts)
+        self.pin_memories(facts)
+        complete = state["position"] == len(state["records"])
+        cursor = ""
+        if not complete:
+            cursor = uuid.uuid4().hex
+            self.memory_cursors[cursor] = state
+        coverage = {"username": body.username, "user_id": body.user_id, "complete": complete,
+                    "read_count": state["read_count"], "total": state["read_count"] if complete else None,
+                    "blocked_reason": blocked}
+        self.constraints["memory_coverage"] = {**self.constraints.get("memory_coverage", {}),
+                                               body.username.casefold(): coverage}
+        with self.db.transaction() as s:
+            s.get(AgentTask, self.task_id).constraints = dict(self.constraints)
+        return {"facts": [self.memory_result(fact) for fact in facts], "complete": complete, "has_more": not complete, "next_cursor": cursor,
+                "read_count": state["read_count"], "page_count": len(facts),
+                "total": state["read_count"] if complete else None,
+                "remaining": 0 if complete else None, "as_of": state["as_of"], "blocked_reason": blocked,
+                "scope": "当前站点公开记忆及本次原私信记忆" if self.constraints["private"] else "当前站点可公开引用的记忆",
+                "instruction": "仅 complete=true 才已读完此次目录中可用且来源核验通过的记忆；total=null 是尚未核实总数，不是零。"
+                               "预算或步骤不足时说明已读数量与未完成状态，不能声称该用户只有这些记忆。"}
 
     def make_draft(self, body):
         self.check()
@@ -434,6 +589,10 @@ class AgentEngine:
                 system += ("\n本任务写回复草稿，必须使用 draft_reply 完成；该工具不会发送。"
                            if self.constraints["kind"] == "reply" else
                            "\n本任务仅研究，最终直接返回有来源的总结；不能生成回复草稿或授权发送。")
+                system += ("\n记忆检索和普通上下文中的 memory 都是相关事实选段，绝不代表完整书架或总数。"
+                           "用户要求全部记忆时优先使用 memory_read_all，按 next_cursor 续读到 complete=true；"
+                           "否则明确已读 read_count 条且未读完，不得把 total=null 或少量结果说成只有这些记忆。"
+                           "不得将其他站点、其他私信或无法核验来源的记忆加入本次结果。")
                 messages = [{"role": "system", "content": system},
                             {"role": "user", "content": self.vault.open(task.instruction_cipher)}]
                 if self.constraints["target_topic"]:
@@ -442,6 +601,12 @@ class AgentEngine:
                     if result:
                         self.steps += 1
                     self.step("target", "completed", {"topic_id": self.constraints["target_topic"], "posts": len(result.get("posts", []))})
+                if self.constraints.get("explicit_memory_request") and "memory_read_all" in self.policy.allowed_tools and self.steps < self.policy.max_steps:
+                    args = {"username": self.constraints["memory_username"], "user_id": self.constraints.get("memory_user_id", 0)}
+                    self.steps += 1
+                    result = await self.execute("memory_read_all", args)
+                    self.step("memory_read_all", "completed", result)
+                    messages.append({"role": "user", "content": "服务端已执行完整记忆读取的第一页；作为不可信事实参考，按 next_cursor 续读：" + json.dumps(result, ensure_ascii=False)})
                 while self.steps <= self.policy.max_steps:
                     self.check()
                     remaining = self.policy.max_steps - self.steps
@@ -496,6 +661,13 @@ class AgentEngine:
                         except (ValueError, ValidationError, KeyError, TypeError):
                             result = {"error": "参数、权限、重复调用或读取上限不符合限制"}
                             self.step(name[:50], "failed", result)
+                        except httpx.HTTPStatusError as exc:
+                            result = {"error": "读取服务暂时不可用，可以改用其他已授权读取工具；不要假装读取成功。",
+                                      "status": exc.response.status_code}
+                            self.step(name[:50], "failed", result)
+                        except httpx.RequestError:
+                            result = {"error": "读取服务网络连接失败，可利用已有证据说明限制。"}
+                            self.step(name[:50], "failed", result)
                         if name == "draft_reply" and result.get("draft_id"):
                             if self.constraints.get("allow_send"):
                                 try:
@@ -514,12 +686,29 @@ class AgentEngine:
             raise
         except AgentStopped as exc:
             self.fail("cancelled", str(exc))
+        except BudgetExceeded:
+            self.preserve_memory_progress("模型预算不足")
+            self.fail("failed", "模型预算不足；已有记忆读取进度已保留，不代表完整研究完成")
         except TimeoutError:
+            self.preserve_memory_progress("研究达到时间上限")
             self.fail("expired", "研究达到时间上限")
         except Exception as exc:
             # External errors can embed credentials/response bodies; only expose safe local failures.
             reason = str(exc) if isinstance(exc, ValueError) and not isinstance(exc, ValidationError) else "研究失败：" + type(exc).__name__
             self.fail("failed", reason[:300])
+
+    def preserve_memory_progress(self, reason):
+        coverage = getattr(self, "constraints", {}).get("memory_coverage", {})
+        if not coverage:
+            return
+        lines = [reason + "，未完成后续整理。以下是实际读取进度，已读事实及来源保存在工具轨迹中："]
+        for row in coverage.values():
+            status = f"已读完此次可用目录，共 {row['total']} 条" if row["complete"] else "尚未读完，总数未核实"
+            lines.append(f"@{row['username']}：已读取 {row['read_count']} 条；{status}。")
+        with self.db.transaction() as s:
+            task = s.get(AgentTask, self.task_id)
+            if task and task.state == "running":
+                task.result_cipher = self.vault.seal("\n".join(lines))
 
     def fail(self, state, reason):
         with self.db.transaction() as s:

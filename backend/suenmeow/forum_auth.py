@@ -11,6 +11,7 @@ from sqlalchemy import delete, func, select
 from .adapters import plain, timestamp
 from .database import Account, ForumIdentity, ForumLogin, KV, LoginSession, Record, audit, locked, now
 from .domain import Strict
+from .identity_view import identity_view
 from .security import LOGIN_CODE, client_address, digest, password_hash, same_token
 from .workspace_api import unique_username
 
@@ -22,14 +23,6 @@ class ForumAuthSettings(Strict):
 
 class ForumFinish(Strict):
     code: str = Field(default="", max_length=8)
-
-
-def identity_view(s, account):
-    identity = s.scalar(select(ForumIdentity).where(ForumIdentity.account_id == account.id))
-    if not identity:
-        return {}
-    return {"display_name": identity.profile.get("name") or identity.profile["username"],
-            "forum_user_id": identity.user_id, "avatar_url": "/api/auth/avatar/" + account.id}
 
 
 def mount_forum_auth(app, db, vault, settings, user, admin):
@@ -196,7 +189,10 @@ def mount_forum_auth(app, db, vault, settings, user, admin):
             identity = s.scalar(select(ForumIdentity).where(ForumIdentity.account_id == account_id))
             if not identity:
                 raise HTTPException(404, "头像不可用")
-            url = urljoin(identity.site + "/", identity.profile.get("avatar_template", "").replace("{size}", "64"))
+            template = identity.profile.get('avatar_template', '')
+            if not template:
+                raise HTTPException(404, '头像不可用')
+            url = urljoin(identity.site + "/", template.replace("{size}", "64"))
             parsed, origin = urlsplit(url), urlsplit(identity.site)
             if parsed.scheme != "https" or parsed.netloc != origin.netloc or parsed.username or parsed.password or parsed.fragment:
                 raise HTTPException(404, "头像地址不可用")

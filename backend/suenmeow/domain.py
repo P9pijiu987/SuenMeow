@@ -9,7 +9,41 @@ class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class InteractionPolicy(Strict):
+    protocol: Literal[2] = 2
+    rule_module: str = Field(default="", max_length=32)
+    merge_seconds: int = Field(12, ge=8, le=30)
+    max_batch: int = Field(20, ge=1, le=20)
+    context_posts: int = Field(8, ge=2, le=20)
+    input_bytes: int = Field(24000, ge=4000, le=60000)
+    ordinary_chars: int = Field(600, ge=100, le=2000)
+    extended_replies: bool = True
+    reply_inclination: Literal["quiet", "balanced", "chatty"] = "balanced"
+    unmentioned: bool = True
+    unmentioned_percent: int = Field(3, ge=0, le=100)
+    reply_daily: int = Field(30, ge=0, le=1000)
+    reply_topic_hourly: int = Field(2, ge=0, le=100)
+    reply_user_hourly: int = Field(4, ge=0, le=100)
+    categories: list[int] = Field(default_factory=list, max_length=100)
+    topics: list[int] = Field(default_factory=list, max_length=200)
+    reactions: bool = True
+    reaction_percent: int = Field(33, ge=0, le=100)
+    reaction_window: int = Field(120, ge=20, le=500)
+    reaction_daily: int = Field(120, ge=0, le=1000)
+    reaction_topic_hourly: int = Field(30, ge=0, le=200)
+    reaction_user_hourly: int = Field(8, ge=0, le=100)
+    write_interval: int = Field(15, ge=5, le=300)
+
+    @field_validator('categories', 'topics')
+    @classmethod
+    def positive_unique_ids(cls, values):
+        if any(v <= 0 for v in values) or len(values) != len(set(values)):
+            raise ValueError('观察范围必须是不同的正整数 ID')
+        return values
+
+
 class Policy(Strict):
+    interaction: InteractionPolicy | None = None  # Old snapshots retain the old executor.
     notification_interval: int = Field(5, ge=5, le=300)
     hot_interval: int = Field(60, ge=30, le=3600)
     hot_min_new_posts: int = Field(5, ge=1, le=1000)
@@ -92,8 +126,8 @@ class ModeInput(Strict):
 class AgentPolicy(Strict):
     enabled: bool = True
     auto_research: bool = False
-    allowed_tools: list[Literal["forum_search", "forum_read_topic", "forum_user_activity", "memory_lookup", "release_describe"]] = Field(
-        default_factory=lambda: ["forum_search", "forum_read_topic", "forum_user_activity", "memory_lookup", "release_describe"])
+    allowed_tools: list[Literal["forum_search", "forum_read_topic", "forum_user_activity", "memory_lookup", "memory_read_all", "release_describe"]] = Field(
+        default_factory=lambda: ["forum_search", "forum_read_topic", "forum_user_activity", "memory_lookup", "memory_read_all", "release_describe"])
     max_steps: int = Field(8, ge=1, le=16)
     max_topics: int = Field(3, ge=1, le=8)
     max_seconds: int = Field(120, ge=20, le=300)

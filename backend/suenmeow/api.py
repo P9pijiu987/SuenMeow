@@ -16,7 +16,8 @@ from .service import ROUTES, dashboard, publish, set_mode
 from .settings import Settings
 from .agent_api import mount_agent_api
 from .workspace_api import mount_workspace_api, check_module_quota, unique_username, visible_records
-from .forum_auth import identity_view, mount_forum_auth
+from .forum_auth import mount_forum_auth
+from .identity_view import identity_view
 from .memory_import import mount_memory_import
 
 
@@ -240,8 +241,13 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     @app.get("/api/config")
     def config(account=Depends(admin)):
         with db.transaction() as s:
+            from .personas import is_persona
+            administrators = set(s.scalars(select(Account.id).where(Account.role == 'admin', Account.active.is_(True))))
             return {"policy": Policy.model_validate(s.get(KV, "policy").data).model_dump(),
-                    "pipeline": s.get(KV, "pipeline").data, "control": s.get(KV, "control").data}
+                    "pipeline": s.get(KV, "pipeline").data, "control": s.get(KV, "control").data,
+                    "interaction_defaults": s.get(KV, 'interaction_defaults').data if s.get(KV, 'interaction_defaults') else {},
+                    "interaction_modules": [{'id': r.id, 'title': r.title} for r in s.scalars(select(Record).where(Record.kind == 'module'))
+                                            if r.owner in administrators and not is_persona(s, r)]}
 
     @app.put("/api/config/policy")
     def policy(body: Policy, account=Depends(admin)):
@@ -547,6 +553,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     from .topic_pipeline import mount_topic_pipelines
     mount_topic_pipelines(app, db, vault, user, admin)
     mount_forum_auth(app, db, vault, settings, user, admin)
+    from .interactions import mount_interactions
+    mount_interactions(app, db, vault, admin)
     mount_memory_import(app, db, vault, user)
     from .topic_review import mount_topic_reviews
     mount_topic_reviews(app, db, vault, user)

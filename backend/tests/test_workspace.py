@@ -199,6 +199,51 @@ def test_multiple_grants_scope_and_revocation(client, env):
     assert client.post('/api/prompts/workspace/save', json={'modules': [draft(updated)]}).status_code == 403
 
 
+def test_grant_directory_uses_verified_identity_and_hides_unused_disabled_accounts(client, env):
+    from suenmeow.database import ForumIdentity
+
+    with env[1].transaction() as s:
+        editor = s.get(Account, env[3]['editor'])
+        editor.username, editor.forum_username = 'forum_322', 'P9pijiu'
+        s.get(Account, env[3]['other']).active = False
+        s.add(ForumIdentity(account_id=editor.id, site='https://forum.example', user_id=322,
+                            profile={'username': 'P9pijiu', 'name': '小九', 'avatar_template': '/avatar/{size}.png'}))
+    login(client)
+    workspace = client.get('/api/prompts/workspace').json()
+    assert len(workspace['accounts']) == 1
+    entry = workspace['accounts'][0]
+    assert entry['id'] == env[3]['editor'] and entry['username'] == 'forum_322'
+    assert entry['display_name'] == '小九' and entry['forum_username'] == 'P9pijiu'
+    assert entry['forum_user_id'] == 322 and entry['avatar_url'].endswith(entry['id'])
+    module = workspace['modules'][0]
+    assert client.post('/api/prompts/workspace/save', json={
+        'modules': [draft(module, grants=[entry['id']])]}).status_code == 200
+    login(client, 'forum_322', 'editor-test-password')
+    own_view = client.get('/api/prompts/workspace').json()
+    assert 'accounts' not in own_view
+    assert next(m for m in own_view['modules'] if m['id'] == module['id'])['editable']
+    assert client.get('/api/accounts').status_code == 403
+
+
+def test_disabled_grantee_remains_visible_only_for_revocation(client, env):
+    login(client)
+    module = client.get('/api/prompts/workspace').json()['modules'][0]
+    assert client.post('/api/prompts/workspace/save', json={
+        'modules': [draft(module, grants=[env[3]['other']])]}).status_code == 200
+    with env[1].transaction() as s:
+        s.get(Account, env[3]['other']).active = False
+    workspace = client.get('/api/prompts/workspace').json()
+    disabled = next(a for a in workspace['accounts'] if a['id'] == env[3]['other'])
+    assert not disabled['active']
+    updated = next(m for m in workspace['modules'] if m['id'] == module['id'])
+    revoked = client.post('/api/prompts/workspace/save', json={'modules': [draft(updated, grants=[])]})
+    assert revoked.status_code == 200
+    assert env[3]['other'] not in {a['id'] for a in revoked.json()['accounts']}
+    updated = next(m for m in revoked.json()['modules'] if m['id'] == module['id'])
+    assert client.post('/api/prompts/workspace/save', json={
+        'modules': [draft(updated, grants=[env[3]['other']])]}).status_code == 422
+
+
 def test_global_module_quota_cannot_be_bypassed_by_registering_again(client, env):
     with env[1].transaction() as s:
         s.add_all(Record(kind='module', owner=env[3]['admin'], title=f'Module {i}', data={

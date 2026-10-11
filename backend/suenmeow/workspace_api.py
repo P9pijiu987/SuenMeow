@@ -7,6 +7,7 @@ from sqlalchemy import Text, cast, func, or_, select
 
 from .database import Account, KV, LoginSession, Record, audit, locked, now
 from .domain import ModuleData, Strict
+from .identity_view import identity_view
 from .security import can_edit, client_address, digest, enforce_record, password_hash, require_admin
 from .service import ROUTES
 from .personas import accepted_persona, is_persona, legacy_persona, publish_personas, require_review, saved_personas
@@ -73,6 +74,8 @@ def mount_workspace_api(app, db, settings, user, admin):
     def view(s, account):
         pipeline = s.get(KV, "pipeline")
         referenced = {mid for ids in pipeline.data.values() for mid in ids}
+        interaction = s.get(KV, 'policy').data.get('interaction')
+        if interaction: referenced.add(interaction['rule_module'])
         editable = set(s.scalars(visible_records(account, "module").with_only_columns(Record.id)))
         modules = []
         for r in s.scalars(select(Record).where(Record.kind == "module").order_by(Record.updated.desc(), Record.id)):
@@ -88,11 +91,14 @@ def mount_workspace_api(app, db, settings, user, admin):
                   "require_review": require_review(s)}
         if account.role == "admin":
             pipeline = s.get(KV, "pipeline")
+            granted = {aid for module in modules for aid in module['grants']}
             result.update(pipeline={**pipeline.data, "agent": pipeline.data.get("agent", [])},
                           pipeline_version=pipeline.version,
                           active_snapshot=s.get(KV, "control").data["active_snapshot"],
-                          accounts=[dict(id=a.id, username=a.username, active=a.active) for a in s.scalars(
-                              select(Account).where(Account.role == "editor"))])
+                          accounts=[dict(id=a.id, username=a.username, active=a.active,
+                                         forum_username=a.forum_username, **identity_view(s, a)) for a in s.scalars(
+                              select(Account).where(Account.role == "editor", or_(Account.active.is_(True), Account.id.in_(granted)))
+                              .order_by(Account.username, Account.id))])
         return result
 
     @app.get("/api/auth/registration")

@@ -146,6 +146,39 @@ class Reply(Base):
     memory_state: Mapped[str] = mapped_column(String(32), default="pending")
 
 
+class Observation(Base):
+    __tablename__ = "interaction_posts"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    receipt: Mapped[str] = mapped_column(String(100), unique=True)
+    topic_id: Mapped[int] = mapped_column(Integer, index=True)
+    post_id: Mapped[int] = mapped_column(Integer)
+    user_id: Mapped[int] = mapped_column(Integer)
+    username: Mapped[str] = mapped_column(String(100))
+    number: Mapped[int] = mapped_column(Integer)
+    epoch: Mapped[int] = mapped_column(Integer)
+    created: Mapped[float] = mapped_column(Float, default=now)
+    expires: Mapped[float] = mapped_column(Float)
+    state: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    reason: Mapped[str] = mapped_column(String(300), default="")
+    event_id: Mapped[str] = mapped_column(String(32), default="", index=True)
+    data: Mapped[dict] = mapped_column(JSON)
+
+
+class Reaction(Base):
+    __tablename__ = "reactions"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    observation_id: Mapped[str] = mapped_column(String(32), unique=True)
+    event_id: Mapped[str] = mapped_column(String(32), index=True)
+    topic_id: Mapped[int] = mapped_column(Integer, index=True)
+    post_id: Mapped[int] = mapped_column(Integer)
+    user_id: Mapped[int] = mapped_column(Integer)
+    emoji: Mapped[str] = mapped_column(String(100))
+    state: Mapped[str] = mapped_column(String(32), index=True)
+    reason: Mapped[str] = mapped_column(String(300), default="")
+    created: Mapped[float] = mapped_column(Float, default=now)
+    claimed: Mapped[float] = mapped_column(Float, default=0)
+
+
 class Usage(Base):
     __tablename__ = "usage"
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
