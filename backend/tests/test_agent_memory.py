@@ -64,7 +64,7 @@ async def test_complete_read_does_not_drop_older_memories_after_global_500_limit
         assert page['total'] is None and page['remaining'] is None and page['has_more']
         cursor = page['next_cursor']
     assert reads == [50, 100, 123]
-    assert len(runner.forum.reads) == 1  # Shared source checked once within this bounded task.
+    assert len(runner.forum.reads) == 3  # Revalidate visibility and source edits between pages.
     with runner.db.transaction() as s:
         constraints = s.get(AgentTask, runner.task_id).constraints
         assert len(constraints['memory_ids']) == 123
@@ -270,3 +270,50 @@ async def test_arbitrary_name_cannot_relabel_another_users_stable_id(env):
     fact(runner.db, runner.vault, ids['editor'], 'do-not-misattribute')
     result = await runner.execute('memory_read_all', {'username': 'another-person', 'user_id': 7})
     assert result['total'] == 0 and not result['facts']
+
+
+async def test_source_becoming_private_between_pages_stops_reading(env):
+    runner, ids = engine(env)
+    for index in range(3): fact(runner.db, runner.vault, ids['editor'], str(index))
+    first = await runner.execute('memory_read_all', {'username': 'human', 'limit': 1})
+    runner.forum.hidden.add(100)
+    with pytest.raises(AgentStopped, match='私密'):
+        await runner.execute('memory_read_all', {'username': 'human', 'cursor': first['next_cursor']})
+
+
+async def test_redacted_quote_between_pages_is_not_read_from_cached_source(env):
+    runner, ids = engine(env)
+    for index in range(3):
+        fact(runner.db, runner.vault, ids['editor'], str(index), origin='personal_topic', quote='我喜欢薄荷')
+    first = await runner.execute('memory_read_all', {'username': 'human', 'limit': 1})
+    topic = runner.forum.topic
+    async def redacted(tid, limit):
+        data = await topic(tid, limit)
+        data['context'][0]['text'] = '原句已经删除。'
+        return data
+    runner.forum.topic = redacted
+    last = await runner.execute('memory_read_all', {'username': 'human', 'cursor': first['next_cursor']})
+    assert last['complete'] and not last['facts'] and last['read_count'] == 1
+
+
+async def test_private_draft_cannot_keep_citing_source_that_becomes_another_private_topic(env):
+    from suenmeow.agent import confirm_draft
+    from suenmeow.database import AgentDraft
+    from suenmeow.service import set_mode
+    from suenmeow.worker import Worker
+    db, vault, ids, tid = prepare(env, kind='reply', target_topic=200, private=True)
+    fact(db, vault, ids['editor'])
+    forum = MemoryForum()
+    model = Model([call('memory_read_all', {'username': 'human'}), call('draft_reply', {'text': '有来源的草稿，尚未发送。'})])
+    await AgentEngine(db, vault, forum, model, tid).run()
+    with db.transaction() as s:
+        set_mode(s, 'auto', ids['admin'])
+        control = s.get(KV, 'control').data
+        s.get(KV, 'worker').data = {'status':'online','baseline_epoch':control['epoch'],'heartbeat':now()}
+        task = s.get(AgentTask, tid)
+        draft = s.scalar(select(AgentDraft).where(AgentDraft.task_id == tid))
+        reply_id = confirm_draft(s, vault, draft, task, draft.digest)
+    forum.hidden.add(100)
+    worker = Worker(db, vault); worker.forum = forum
+    assert not await worker.validate_agent_target(reply_id, tid)
+    assert forum.sends == []

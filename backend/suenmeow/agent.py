@@ -453,6 +453,22 @@ class AgentEngine:
         # in every model turn spends budget without adding evidence to the fact.
         return {key: value for key, value in fact.items() if key not in ("version", "updated")}
 
+    async def refresh_memory_sources(self):
+        # A model turn between pages can last long enough for a source to become
+        # private or be edited. Refresh in place so the distinct-topic cap persists.
+        for topic_id in list(self.topics):
+            self.check()
+            current = await self.forum.topic(topic_id, 20)
+            if current.get("id") != topic_id:
+                raise AgentStopped("记忆来源主题不匹配，停止读取")
+            public = await self.forum.public_visible(current)
+            if not public and (not self.constraints["private"] or topic_id != self.constraints["target_topic"]):
+                raise AgentStopped("记忆来源已变为私密，停止读取")
+            if public and self.constraints["private"] and topic_id == self.constraints["target_topic"]:
+                raise AgentStopped("原指定私密范围已变化，停止读取")
+            self.topics[topic_id] = {**current, "public": public}
+            self.memory_posts = {key: value for key, value in self.memory_posts.items() if key[0] != topic_id}
+
     async def read_all_memories(self, body):
         identity = (body.username.casefold(), body.user_id)
         if body.cursor:
@@ -468,7 +484,11 @@ class AgentEngine:
             self.memory_catalogs[identity] = state
         facts, size, checked, blocked = [], 0, 0, ""
         self.memory_window = state["records"][state["position"]:state["position"] + body.limit]
-        while state["position"] < len(state["records"]) and checked < body.limit:
+        try:
+            await self.refresh_memory_sources()
+        except (httpx.HTTPError, TimeoutError):
+            blocked = "来源暂时无法重新核验，尚未读完；不使用上一页的权限状态继续读取。"
+        while not blocked and state["position"] < len(state["records"]) and checked < body.limit:
             self.check()
             if "memory_read_all" not in self.policy.allowed_tools:
                 raise AgentStopped("完整读取记忆的工具权限已撤销")
@@ -685,6 +705,7 @@ class AgentEngine:
             self.fail("interrupted", "研究被中断，不自动恢复或发送")
             raise
         except AgentStopped as exc:
+            self.preserve_memory_progress(str(exc))
             self.fail("cancelled", str(exc))
         except BudgetExceeded:
             self.preserve_memory_progress("模型预算不足")

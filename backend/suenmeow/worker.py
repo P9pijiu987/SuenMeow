@@ -598,8 +598,8 @@ class Worker:
                     checked[source.topic_id] = topic
                 if source.post_id not in topic.get("post_stream", {}).get("stream", []):
                     raise ValueError("来源帖子已删除")
-                if not constraints["private"] and not await self.forum.public_visible(topic):
-                    raise ValueError("来源已变为私密")
+                if not await self.forum.public_visible(topic) and (not constraints["private"] or source.topic_id != reply.topic_id):
+                    raise ValueError("来源已变为私密或越出原指定对话")
                 if not source.public and source.topic_id != reply.topic_id:
                     raise ValueError("私密来源越出指定对话")
             return True

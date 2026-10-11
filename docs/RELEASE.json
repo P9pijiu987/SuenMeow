@@ -28,7 +28,8 @@
     "已授权 DeepSeek 使用110条明确虚构记忆完成实际主动续读：3次模型调用、38293 tokens，完整性true、总数110；真实论坛读取、写入与生产数据库修改均0。",
     "MacBook PostgreSQL完整238通过（170.91秒）；最终Agent、记忆、互动和发送安全专项86通过（57.53秒）。本地完整223通过、14跳过为较早轮次，后续专项另记，不合并成一次全套。",
     "完整记忆工具设置与每页、累计、未完成和已读完提示通过界面模拟；1280px和390px均无横向溢出。正文长度、目标及扩展失败不再丢弃独立有效表情。",
-    "2026-10-11: deployed and verified auto / snapshot 7 / epoch 24 / worker baseline 24; memory_read_all enabled; active modules and pipeline preserved; cat nest off. Reaction target 33%, uninvited reply sampling 3%; PostgreSQL final quota checks: 35 passed (22.96 seconds)."
+    "2026-10-11: deployed and verified auto / snapshot 7 / epoch 24 / worker baseline 24; memory_read_all enabled; active modules and pipeline preserved; cat nest off. Reaction target 33%, uninvited reply sampling 3%; PostgreSQL final quota checks: 35 passed (22.96 seconds).",
+    "最终分页隐私补丁 PostgreSQL 联合专项90通过（57.42秒）；续读重新核验来源可见性与原句，私密草稿不能引用其他后来变私密的来源。通过后更新API/worker，模式和快照不变。"
   ],
   "simulated_validation": [
     "整帖功能最终本地完整158通过/13项PostgreSQL跳过（33.73秒），MacBook完整PostgreSQL171通过（311.76秒，无跳过）；临时测试容器途中CPU调到2，正式服务限额不变。TypeScript/Vite、1280px/390px模拟GUI、一键自动Markdown下载和JSON完整文件验证通过。包括301楼/长文末尾/所有作者、逐层合并、缓存手动恢复、实际预算结算、取消/撤回/身份/CSRF/所有者/并发/过期。授权DeepSeek用4条虚构发言和原发布人格、新工作规则完成2调用/3340token协议验收，4条有效引用；生产模型任务和事实未写入，不冒充真实长帖质量验收",
