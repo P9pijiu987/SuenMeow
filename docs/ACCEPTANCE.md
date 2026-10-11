@@ -9,7 +9,7 @@
 - 最终 TypeScript/Vite 构建通过：`index-D6s53D4f.js`、`index-CoF-5zbK.css`。1280px/390px 本地模拟管理员修改预算并重新打开确认保存、草稿修订撤销旧批准并生成新未批准预览；均无横向溢出。截图：[预算](screenshots/agent-budgets.png)、[手机预算](screenshots/agent-budgets-mobile.png)、[修订](screenshots/agent-draft-revision.png)、[手机修订](screenshots/agent-draft-revision-mobile.png)。截图金额与任务均是模拟数据，不能当作生产配置或真实研究。
 - 已授权 DeepSeek 用原人格和新版工作规则完成三组明确虚构输入：**3次调用/15,696 token**。正确识别256×256红左蓝右图片，薄荷茶偏好以本人原句保存，普通互动没有额外记忆调用。任务和事实只在临时隔离库，真实论坛读取/写入及生产事实/任务修改0；不冒充真实自然对话或用户图片质量验收。
 - 新镜像在 MacBook 真实只读适配器核验：固定公开网络搜索得到六个来源；用户给定主题 #13340 的第311楼正确读取且属于原主题。0模型调用、0回帖或React。搜索仅标题/摘要，未宣称读过网页全文；本轮没有重放原错误回答来宣称语义质量已完全修复。
-- 更新前已有数据库 `v2-before-incident-fixes-20261011.dump` 和匹配源码 `v2-code-before-incident-fixes-20261011.tar.gz`，受限目录、文件0600。本轮后续切换、HTTPS管理员预算检查及部署后归档尚待批准完成，不记作已验证。
+- 更新前已有数据库 `v2-before-incident-fixes-20261011.dump` 和匹配源码 `v2-code-before-incident-fixes-20261011.tar.gz`，两份文件分别为3,057,909/2,881,369字节，权限0600，数据库 `pg_restore --list` 通过；不等同于新完整恢复演练。本轮后续切换、HTTPS管理员预算检查及部署后归档尚待批准完成，不记作已验证。
 
 ## 2026-10-11 最新修复：完整记忆 Agent
 
