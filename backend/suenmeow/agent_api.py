@@ -5,11 +5,25 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
+from pydantic import Field
 
 from .agent import TERMINAL, confirm_draft, draft_digest, enqueue, own_session, own_task
 from .database import (Account, AgentDraft, AgentMessage, AgentSession, AgentSource, AgentStep,
                        AgentTask, KV, LoginSession, Reply, Usage, audit, locked, now)
-from .domain import AgentConfirmInput, AgentDraftInput, AgentMessageInput, AgentPolicy
+from .domain import AgentConfirmInput, AgentDraftInput, AgentMessageInput, AgentPolicy, Policy, Strict
+from .service import save_budget_limits
+from .database import day
+
+
+class ResearchSettings(Strict):
+    policy: AgentPolicy
+    daily_tokens: int = Field(ge=1000, le=10000000)
+    topic_tokens: int = Field(ge=1000, le=1000000)
+
+
+class DraftRevision(Strict):
+    text: str = Field(min_length=1, max_length=12000)
+    version: int = Field(gt=0)
 
 
 def mount_agent_api(app, db, vault, admin):
@@ -54,6 +68,29 @@ def mount_agent_api(app, db, vault, admin):
             s.get(KV, "agent_policy").data = body.model_dump()
             audit(s, account.id, "agent_settings_changed")
         return {"ok": True}
+
+    @router.get('/budgets')
+    def budgets(account=Depends(admin)):
+        with db.transaction() as s:
+            live = s.get(KV, 'budget_limits')
+            snapshot = s.get(KV, 'control').data['active_snapshot']
+            from .database import Snapshot
+            limits = live.data if live else Policy.model_validate(s.get(Snapshot, snapshot).data['policy']).model_dump() if snapshot else Policy().model_dump()
+            usage = list(s.scalars(select(Usage).where(Usage.day == day())))
+            return {k: limits[k] for k in ('daily_tokens', 'topic_tokens')} | {
+                'day': day(), 'used_today': sum(u.tokens for u in usage),
+                'reserved_today': sum(u.tokens for u in usage if u.state == 'reserved'),
+                'failed_reserved_today': sum(u.tokens for u in usage if u.state == 'failed_reserved'),
+                'admin_research_uses_topic_budget': False}
+
+    @router.put('/settings/bundle')
+    def save_research_settings(body: ResearchSettings, account=Depends(admin)):
+        with db.transaction() as s:
+            locked(s, 'agent_lock')
+            save_budget_limits(s, body.daily_tokens, body.topic_tokens, account.id)
+            s.get(KV, 'agent_policy').data = body.policy.model_dump()
+            audit(s, account.id, 'agent_settings_changed')
+        return {'ok': True}
 
     @router.post("/sessions")
     def create_session(account=Depends(admin)):
@@ -177,5 +214,40 @@ def mount_agent_api(app, db, vault, admin):
             task = own_task(s, draft.task_id, account.id, lock=True)
             draft = s.scalar(select(AgentDraft).where(AgentDraft.id == draft_id).with_for_update())
             return {"reply_id": confirm_draft(s, vault, draft, task, body.digest)}
+
+    @router.post('/drafts/{draft_id}/revise')
+    def revise(draft_id: str, body: DraftRevision, account=Depends(admin)):
+        with db.transaction() as s:
+            locked(s, 'control')
+            draft = s.scalar(select(AgentDraft).where(AgentDraft.id == draft_id).with_for_update())
+            if not draft:
+                raise HTTPException(404, '草稿不存在')
+            original = own_task(s, draft.task_id, account.id, lock=True)
+            if original.cancelled:
+                raise HTTPException(409, '原任务已停止或已有修订，请使用最新草稿')
+            if draft.version != body.version:
+                raise HTTPException(409, '草稿已变化，请读取最新版再提出修改')
+            reply = s.get(Reply, draft.reply_id) if draft.reply_id else None
+            if reply and reply.state in ('sending', 'sent', 'unknown'):
+                raise HTTPException(409, '请求已发出或结果不确定，不能以修订重发')
+            if not original.session_id or original.constraints.get('origin') == 'forum':
+                raise HTTPException(409, '请在管理员会话中创建修订任务')
+            instruction = ('修订原草稿，使用已授权读取工具核实所需资料；正文中的事实和引用仍需重新核验。'
+                           '本次只能生成预览，不授权发送，不能改变目标。\n管理员修改要求：' + body.text +
+                           '\n原草稿（待核验资料）：\n' + vault.open(draft.text_cipher))
+            # The combined draft may exceed the ordinary instruction limit; keep
+            # it encrypted in task context rather than silently truncating it.
+            message = AgentMessageInput(text=body.text, kind='reply', allow_send=False,
+                                        target_topic=original.constraints['target_topic'], private=original.constraints['private'],
+                                        reply_to=original.constraints.get('reply_to', 0), max_chars=original.constraints['max_chars'])
+            tid = enqueue(s, vault, account.id, original.session_id, message)
+            revised = s.get(AgentTask, tid)
+            revised.instruction_cipher = vault.seal(instruction)
+            revised.constraints = {**revised.constraints, 'revises_task': original.id}
+            if reply:
+                reply.state, reply.reason = 'cancelled', 'Agent 修订撤销旧批准'
+            original.cancelled, original.state, original.reason = True, 'cancelled', '已创建修订任务，旧草稿不能发送'
+            audit(s, account.id, 'agent_draft_revision', tid, original=original.id)
+            return {'task_id': tid}
 
     app.include_router(router)

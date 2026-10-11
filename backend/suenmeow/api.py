@@ -252,9 +252,11 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     @app.put("/api/config/policy")
     def policy(body: Policy, account=Depends(admin)):
         with db.transaction() as s:
+            from .service import save_budget_limits
+            save_budget_limits(s, body.daily_tokens, body.topic_tokens, account.id)
             s.get(KV, "policy").data = body.model_dump()
             audit(s, account.id, "policy_draft_saved")
-        return {"ok": True, "message": "草稿已保存，发布后生效"}
+        return {"ok": True, "message": "预算已即时生效；其他策略发布后生效"}
 
     @app.put("/api/config/pipeline")
     def pipeline(body: dict[str, list[str]], account=Depends(admin)):
@@ -296,6 +298,9 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
             if not v:
                 raise HTTPException(404, "版本不存在")
             s.get(KV, "policy").data = v.data["policy"]
+            from .service import save_budget_limits
+            restored_policy = Policy.model_validate(v.data['policy'])
+            save_budget_limits(s, restored_policy.daily_tokens, restored_policy.topic_tokens, account.id)
             pipeline = locked(s, "pipeline")
             pipeline.data, pipeline.version = v.data["pipeline"], pipeline.version + 1
             for mid, data in v.data["modules"].items():

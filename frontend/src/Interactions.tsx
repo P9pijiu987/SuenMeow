@@ -23,6 +23,7 @@ export function InteractionSettings({ value, defaults, modules, onChange }: { va
       <label className="field"><span>互动工作规则</span><select required value={value.rule_module} onChange={e => set('rule_module', e.target.value)}><option value="">请选择工作规则</option>{modules.map(m => <option value={m.id} key={m.id}>{m.title}</option>)}</select><small>在「人格与提示词」编辑所选规则。原有回复人格和风格仍保留。</small></label>
     </div><label className="toggle-row"><span><strong>未被点名也可以接话</strong></span><input type="checkbox" checked={value.unmentioned} onChange={e => set('unmentioned', e.target.checked)}/></label>
     <label className="toggle-row"><span><strong>复杂问题可以另写长回答</strong><small>确需展开时增加一次正文调用；普通接话仍只有一次。</small></span><input type="checkbox" checked={value.extended_replies} onChange={e => set('extended_replies', e.target.checked)}/></label>
+    <label className="toggle-row"><span><strong>自动记住明确自述的事实</strong><small>在现有判断中提取，必须有本人原句和来源；不额外调用记忆模型。</small></span><input type="checkbox" checked={value.automatic_memory !== false} onChange={e => set('automatic_memory', e.target.checked)}/></label>
     <label className="toggle-row"><span><strong>允许论坛原生表情</strong><small>按内容适合程度、比例与限额选择；不强行凑够三分之一。</small></span><input type="checkbox" checked={value.reactions} onChange={e => set('reactions', e.target.checked)}/></label></>}
   </section>
 }

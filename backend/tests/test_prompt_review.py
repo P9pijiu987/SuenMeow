@@ -103,7 +103,7 @@ async def test_persona_auto_publication_review_and_active_uses(client, env, setu
         assert current.version == current.published_version == 1  # Persona publication preserves ordering.
 
 
-def test_persona_publication_preserves_unpublished_global_work(client, env):
+def test_module_save_applies_selected_work_preserving_order_and_policy(client, env):
     login(client)
     with env[1].transaction() as s:
         version = publish(s, env[3]['admin'], 'baseline')
@@ -120,7 +120,8 @@ def test_persona_publication_preserves_unpublished_global_work(client, env):
     with env[1].transaction() as s:
         current = s.get(Snapshot, s.get(KV, 'control').data['active_snapshot']).data
         assert current['modules'][persona['id']]['content'] == '新人格'
-        assert current['modules'][work['id']] == old['modules'][work['id']]
+        assert current['modules'][work['id']]['content'] == '不能偷偷发布的系统草稿'
+        assert s.get(Snapshot, version).data == old
         assert current['pipeline'] == old['pipeline'] and current['policy'] == old['policy']
         assert s.get(Record, work['id']).data['content'] == '不能偷偷发布的系统草稿'
 

@@ -92,3 +92,24 @@ def publish_personas(s, records, actor, refresh_global=True):
 def saved_personas(s, records, actor):
     if not require_review(s):
         publish_personas(s, records, actor)
+    # Saving an authorized work module refreshes only that module in the active
+    # immutable snapshot. Policy and ordering drafts are deliberately preserved.
+    control = locked(s, 'control')
+    snapshot = s.get(Snapshot, control.data['active_snapshot'])
+    if not snapshot:
+        return
+    source = deepcopy(snapshot.data)
+    changed = False
+    for r in records:
+        if is_persona(s, r) or r.id not in source['modules']:
+            continue
+        original = source['modules'][r.id]
+        if original.get('persona') or legacy_persona(s, r.id, original['title']):
+            continue  # A persona cannot bypass optional review by changing its flag.
+        updated = {'title': r.title, 'content': r.data.get('content', ''), 'persona': False, 'version': r.version}
+        if original != updated:
+            source['modules'][r.id] = updated
+            changed = True
+    if changed:
+        from .service import publish
+        publish(s, actor, '保存系统提示词即时生效；保留全局策略与编排草稿', source=source)

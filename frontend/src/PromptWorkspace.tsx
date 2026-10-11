@@ -45,7 +45,7 @@ export function PromptWorkspace({ user, act }: { user: Data, act: Action }) {
     const ok = await act(async () => {
       try { accept(await api('/prompts/workspace/save', 'POST', payload), selected) }
       catch (e) { failure = (e as Error).message; throw e }
-    }, base?.require_review ? '修改已保存为草稿，等待管理员发布' : '人格修改已生效；系统提示词与全局编排保留草稿')
+    }, base?.require_review ? '系统提示词已即时生效；人格修改等待管理员审核' : '人格与系统提示词已保存；在用内容即时生效，全局编排仍需发布')
     if (!ok) setError(failure || '保存未完成，修改仍保留，请重试')
     setBusy(false)
     return ok
@@ -65,7 +65,7 @@ export function PromptWorkspace({ user, act }: { user: Data, act: Action }) {
   if (!base) return <div className="empty">{error || '正在读取提示词工作区…'}{error && <button onClick={load}>重试</button>}</div>
   return <div className={'prompt-workspace ' + (!admin ? 'editor-workspace' : '')}>
     <ReviewSettings admin={admin} disabled={busy || dirty} onChange={required => setBase(previous => previous ? { ...previous, require_review: required } : previous)}/>
-    <div className="workspace-intro"><div><h2>一边写，一边编排。</h2><p>{admin ? `全局配置 v${base.active_snapshot || '未发布'} · 系统提示词和全局编排仍需管理员发布。` : '全部人格和全局编排可只读查看；仅自己的或获授权模块可编辑。个人贴编排在侧栏单独管理。'}</p></div>
+    <div className="workspace-intro"><div><h2>一边写，一边编排。</h2><p>{admin ? `全局配置 v${base.active_snapshot || '未发布'} · 在用系统提示词保存即时生效；全局编排仍需发布。` : '全部人格和全局编排可只读查看；仅自己的或获授权模块可编辑。个人贴编排在侧栏单独管理。'}</p></div>
       <button disabled={busy} onClick={() => dirty ? setConfirmReload(true) : void load()}><RefreshCw size={15}/>重新读取</button></div>
     <div className="prompt-columns">
       <aside className="prompt-library panel"><div className="section-head"><h3>模块书架 <small>{modules.length}</small></h3><button className="icon-button" aria-label="新建模块" disabled={busy} onClick={() => create()}><Plus size={19}/></button></div>
@@ -101,7 +101,7 @@ export function PromptWorkspace({ user, act }: { user: Data, act: Action }) {
         <p className="route-footnote">{admin ? '模块编辑与编排一次保存。前往回复策略页发布完整配置。' : '全局编排只读。到「个人贴编排」选择专属人格，系统工作规则仍保留。'}</p>
       </aside>}
     </div>
-    <SaveDock dirty={dirty} busy={busy} save={() => void save()} error={error} label={base.require_review ? '保存草稿' : '保存修改'} detail={dirty ? `${changed.length} 个模块${deleted.length ? ` · 删除 ${deleted.length} 个` : ''}${pipelineDirty ? ' · 编排已修改' : ''} · ⌘ / Ctrl + S` : base.require_review ? '人格修改等待审核；系统提示词和全局编排需管理员发布' : '人格保存后生效；系统提示词和全局编排保存为草稿'}/>
+    <SaveDock dirty={dirty} busy={busy} save={() => void save()} error={error} label={base.require_review ? '保存草稿' : '保存修改'} detail={dirty ? `${changed.length} 个模块${deleted.length ? ` · 删除 ${deleted.length} 个` : ''}${pipelineDirty ? ' · 编排已修改' : ''} · ⌘ / Ctrl + S` : base.require_review ? '人格修改等待审核；在用系统提示词即时生效，全局编排需发布' : '人格和在用系统提示词保存生效；全局编排需发布'}/>
     {deleteTarget && <div className="backdrop"><section className="modal" role="dialog" aria-modal="true" aria-label="删除提示词模块"><h2>删除「{deleteTarget.title}」？</h2><p>保存时删除草稿模块{admin ? '，并移除草稿编排中的引用' : '。已被全局编排引用的模块需管理员先移除引用'}。已发布快照仍然保留。</p><div className="form-actions"><button onClick={() => setDeleteTarget(null)}>取消</button><button className="danger" onClick={() => {
       setDeleted([...deleted, { id: deleteTarget.id, version: deleteTarget.version }]); setModules(modules.filter(m => m.id !== deleteTarget.id)); setSelected(modules.find(m => m.id !== deleteTarget.id)?.id || '')
       if (pipeline) setPipeline(Object.fromEntries(Object.entries(pipeline).map(([key, ids]) => [key, ids.filter((id: string) => id !== deleteTarget.id)])))

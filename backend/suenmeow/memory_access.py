@@ -40,7 +40,7 @@ def source_matches(fact, post, source_text):
             return False
     elif post.get("username", "").casefold() != fact.get("username", "").casefold():
         return False
-    if fact.get("origin") == "personal_topic":
+    if fact.get("origin") in ('personal_topic', 'interaction_fact'):
         quote = fact.get("quote", "")
         if not isinstance(quote, str) or not quote.strip() or quote not in source_text(post):
             return False

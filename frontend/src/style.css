@@ -26,6 +26,7 @@
 .agent-check { display: flex; align-items: start; gap: 9px; margin: 12px 0; font-size: 13px; line-height: 1.6; }
 .agent-check input { width: 16px; min-height: 16px; margin-top: 3px; flex: 0 0 16px; }
 .agent-compose .form-actions { flex-wrap: wrap; }
+.agent-draft .field textarea { min-height: 110px; }
 .agent-evidence h3 { display: flex; gap: 8px; align-items: center; }
 .agent-steps { display: grid; gap: 6px; margin-top: 18px; }
 .agent-steps summary { display: flex; gap: 8px; align-items: center; cursor: pointer; font-size: 13px; padding: 8px 0; }

@@ -127,12 +127,21 @@ def reserve(db, route: str, topic_id: int, tokens: int, policy: Policy, task_id=
             valid_job(s, review_job)
         total = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).where(Usage.day == day()))
         topic = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).where(Usage.day == day(), Usage.topic_id == topic_id))
-        if total + tokens > policy.daily_tokens or (not full_memory and not full_review and topic + tokens > policy.topic_tokens):
-            raise BudgetExceeded("模型预算不足")
+        live = s.get(KV, 'budget_limits')
+        limits = live.data if live else policy.model_dump()
+        agent = s.get(AgentTask, task_id) if route == 'agent' and task_id else None
+        # Administrator research has its own per-task budget. Topic 0 must not
+        # become a shared daily bucket for every unrelated administrator job.
+        owner = s.get(Account, agent.owner) if agent else None
+        admin_research = bool(agent and owner and owner.active and owner.role == 'admin' and agent.constraints.get('origin') != 'forum')
+        if total + tokens > limits['daily_tokens']:
+            raise BudgetExceeded.limit('daily', limits['daily_tokens'], total, tokens)
+        if not (full_memory or full_review or admin_research) and topic + tokens > limits['topic_tokens']:
+            raise BudgetExceeded.limit('topic', limits['topic_tokens'], topic, tokens)
         if task_id and task_limit:
             used = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).where(Usage.task_id == task_id))
             if used + tokens > task_limit:
-                raise BudgetExceeded("Agent 任务预算不足")
+                raise BudgetExceeded.limit('task', task_limit, used, tokens)
         if route == "memory" and task_id:
             job = s.get(MemoryImport, task_id)
             owner = s.get(Account, job.owner) if job else None
@@ -156,7 +165,29 @@ def settle(db, usage_id: str, actual: int | None, failed=False):
 
 
 class BudgetExceeded(Exception):
-    pass
+    def __init__(self, message, details=None):
+        super().__init__(message)
+        self.details = details or {}
+
+    @classmethod
+    def limit(cls, scope, limit, used, requested):
+        label = {'daily': '全站每日', 'topic': '自动互动单帖每日', 'task': '本次 Agent 任务'}[scope]
+        return cls(f'{label}预算不足：上限 {limit:,}，已用或预留 {used:,}，本次需要预留 {requested:,} token。'
+                   '可在「与猫交谈 → 研究策略 → 预算」调整；这是本站限额，不代表模型账户余额不足。',
+                   {'scope': scope, 'limit': limit, 'used': used, 'requested': requested, 'remaining': max(0, limit-used)})
+
+
+def save_budget_limits(s, daily_tokens, topic_tokens, actor):
+    locked(s, 'budget_lock')
+    values = {'daily_tokens': daily_tokens, 'topic_tokens': topic_tokens}
+    row = s.get(KV, 'budget_limits')
+    if row:
+        row.data, row.version = values, row.version + 1
+    else:
+        s.add(KV(key='budget_limits', data=values))
+    policy = s.get(KV, 'policy')
+    policy.data = {**policy.data, **values}
+    audit(s, actor, 'budget_limits_saved', **values)
 
 
 def add_event(db, receipt: str, topic_id: int, data: dict, epoch: int, snapshot_id: int, ttl: int, timestamp=None):
@@ -297,8 +328,9 @@ def mark_unknown(db):
 
 def dashboard(s, admin: bool):
     control, snapshot = get_snapshot(s)
+    live_budget = s.get(KV, 'budget_limits')
     usage = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).where(Usage.day == day()))
     states = dict(s.execute(select(Reply.state, func.count()).group_by(Reply.state)).all()) if admin else {}
     return {"control": control, "worker": s.get(KV, "worker").data, "tokens_today": usage,
-            "daily_budget": snapshot.data["policy"]["daily_tokens"] if snapshot else 800000,
+            "daily_budget": live_budget.data['daily_tokens'] if live_budget else snapshot.data["policy"]["daily_tokens"] if snapshot else 800000,
             "reply_counts": states, "published_at": snapshot.created if snapshot else None}

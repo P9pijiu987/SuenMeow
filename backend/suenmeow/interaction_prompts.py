@@ -1,5 +1,6 @@
 PROTOCOL = """本次使用互动协议 2，覆盖旧路由的 JSON/只输出正文格式。只输出 JSON：{"posts":[{"post_id":123,"reaction":"heart","score":0.8,"reason":"具体理由"}],"reply":{"post_id":123,"text":"普通回复正文","reason":"接话理由","research":false,"long":false}}。
 posts 完整覆盖 new_posts 的每个 post_id，恰好一次；reaction 只来自 allowed_reactions，不合适时空字符串、score=0，score 范围 0–1。每条说明简短原因。need_reply=false 时必须无正文；不回复时 post_id=0,text=""。最多一条正文，目标必须来自 new_posts，遵守 max_reply_chars。普通接话必须 long=false；确需展开解释且 allow_extended_reply=true 才建议 long=true，另一路模型有界补充。research 只是建议，不授予工具或发送权限。memory 是检索片段，不能据此判断用户总记忆数，不能说“只记得这几条”；需要全部记忆时建议 research=true，由 Agent 的 memory_read_all 有界续读。正文目标只能来自 allowed_reply_post_ids；通常绝大多数发言只旁观或表情，need_reply=true 也不是必须回复。不增加其他字段或隐藏思考过程。"""
+PROTOCOL += '\n若 automatic_memory=true，可额外返回 memories 数组（最多三条），格式 {"source_post_id":123,"text":"该作者明确表达的长期偏好或经历","quote":"该作者新发言中的连续原句"}。没有值得记住的内容时为空数组。只提取 new_posts 作者明确自述的稳定事实，不猜测身份、情绪或关系，不从引用、图片、注册信息或机器人虚构生活提取，不记录密码、验证码、联系方式、健康/性/财务等敏感资料。不为每条消息硬造记忆。不要另调用模型整理记忆。'
 
 RULES = """# 合并阅读与自然接话（互动协议 2）
 按当前人格阅读同一对话的新发言。逐条选择适合的论坛表情，或者明确保持沉默；不为凑比例给敏感经历、危机求助、冲突或凭据信息点趣味表情。不得声称已经执行任何动作。

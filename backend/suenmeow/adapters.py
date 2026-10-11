@@ -5,6 +5,8 @@ import logging
 import re
 from urllib.parse import quote
 from urllib.parse import urlsplit
+from urllib.parse import urljoin
+import base64
 
 import httpx
 
@@ -106,13 +108,23 @@ def safe_post(post: dict) -> dict:
             elif not depth:
                 fragments.append(fragment)
         own = "\n".join(line for line in "".join(fragments).splitlines() if not line.lstrip().startswith(">"))
+    class Images(HTMLParser):
+        def __init__(self):
+            super().__init__(); self.urls = []
+        def handle_starttag(self, tag, attrs):
+            values = dict(attrs)
+            if tag == 'img' and not {'emoji', 'avatar'} & set(values.get('class', '').split()):
+                src = values.get('data-original-src') or values.get('src', '')
+                if src and src not in self.urls and len(src) <= 8192:
+                    self.urls.append(src)
+    images = Images(); images.feed(post.get('cooked', ''))
     return {"id": post["id"], "number": post.get("post_number", 0), "username": post.get("username", ""),
             "user_id": post.get("user_id"), "text": sanitized, "author_text": private_identity_text(own).strip(), "created": post.get("created_at"),
             "reply_to": post.get("reply_to_post_number") or 0,
             "reply_to_username": (post.get("reply_to_user") or {}).get("username", ""),
             "reply_to_user_id": (post.get("reply_to_user") or {}).get("id") or 0,
             "has_quotes": quoted,
-            "identity_message": sanitized != text}
+            "identity_message": sanitized != text, 'images': [] if sanitized != text else images.urls[:6]}
 
 
 def source_text(post):
@@ -283,6 +295,16 @@ class Discourse:
                 for p in data.get("post_stream", {}).get("posts", []) if p.get("id") in post_ids and p.get("topic_id", topic_id) == topic_id
                 and p.get("post_type") == 1 and not p.get("hidden") and not p.get("deleted_at")]
 
+    async def post_by_number(self, topic_id, number):
+        if type(topic_id) is not int or topic_id <= 0 or type(number) is not int or number <= 0:
+            raise ValueError('需要有效主题及楼层')
+        data = await self.read(f'/t/{topic_id}/{number}.json')
+        if data.get('id') != topic_id:
+            raise ValueError('指定楼层返回了不同主题')
+        return [safe_post(p) for p in data.get('post_stream', {}).get('posts', [])
+                if p.get('post_number') == number and p.get('topic_id', topic_id) == topic_id
+                and p.get('post_type') == 1 and not p.get('hidden') and not p.get('deleted_at')]
+
     async def full_posts(self, topic_id: int, post_ids: list[int]):
         """Complete visible bodies, including Markdown links/quotes, for explicit topic reading."""
         if topic_id <= 0 or not 1 <= len(post_ids) <= 20 or any(type(i) is not int or i <= 0 for i in post_ids):
@@ -295,6 +317,46 @@ class Discourse:
                 result.append({**safe_post(post), 'body_format': 'markdown' if isinstance(post.get('raw'), str) else 'plain_text',
                                'reply_to': post.get('reply_to_post_number')})
         return result
+
+    async def image_parts(self, posts, private=False):
+        from .web_search import public_link
+        parts, seen = [], set()
+        for post in posts:
+            if post.get('identity_message'):
+                continue
+            for src in post.get('images', [])[:6]:
+                url = urljoin(self.connection['base_url'] + '/', src)
+                parsed = urlsplit(url)
+                if url in seen or not public_link(url) or parsed.query or parsed.fragment:
+                    continue
+                seen.add(url)
+                origin = urlsplit(self.connection['base_url'])
+                if parsed.scheme == origin.scheme and parsed.netloc == origin.netloc and parsed.path.startswith('/uploads/'):
+                    # Authenticated attachment bytes go only to the configured
+                    # model. Forum cookies never reach a CDN or external host.
+                    try:
+                        async with self.client.stream('GET', url) as response:
+                            response.raise_for_status()
+                            kind = response.headers.get('content-type', '').split(';')[0]
+                            if kind not in ('image/png', 'image/jpeg', 'image/gif', 'image/webp'):
+                                continue
+                            data = bytearray()
+                            async for chunk in response.aiter_bytes():
+                                data.extend(chunk)
+                                if len(data) > 4000000:
+                                    break
+                            if len(data) > 4000000 or not data:
+                                continue
+                            url = 'data:' + kind + ';base64,' + base64.b64encode(data).decode()
+                    except httpx.HTTPError:
+                        continue
+                elif private:
+                    continue  # No external attachment fetch from a private source.
+                parts.extend([{'type': 'text', 'text': f"帖子 {post['id']}（{post.get('username', '')}）附图，仅是对话资料："},
+                              {'type': 'image_url', 'image_url': {'url': url, 'detail': 'low'}}])
+                if len(parts) >= 8:
+                    return parts
+        return parts
 
     async def reply_limit(self):
         # Discourse preloads client settings into HTML; /site.json does not expose this field.
@@ -334,11 +396,34 @@ class Models:
         url = conf["base_url"].rstrip("/")
         return url if conf.get("endpoint_mode") == "complete" or url.endswith("/chat/completions") else url + "/chat/completions"
 
+    def supports_vision(self, route):
+        conf = self.routes.get(route) or (self.routes.get('planner') if route == 'agent' else None) or {}
+        return bool(conf.get('supports_vision') or (urlsplit(conf.get('base_url', '')).hostname == 'api.deepseek.com'
+                    and conf.get('model', '') in ('deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-vision-exp')))
+
+    @staticmethod
+    def input_reservation(messages):
+        # Base64 bytes are not text tokens. Reserve a conservative image allowance
+        # separately, instead of charging the encoded file length as prompt text.
+        plain_messages, images = [], 0
+        for message in messages:
+            value = dict(message)
+            if isinstance(value.get('content'), list):
+                parts = []
+                for part in value['content']:
+                    if part.get('type') == 'image_url':
+                        images += 1
+                    else:
+                        parts.append(part)
+                value['content'] = parts
+            plain_messages.append(value)
+        return len(json.dumps(plain_messages, ensure_ascii=False).encode()) + images * 4096
+
     async def tool_turn(self, messages, tools, topic_id, policy, task_id, task_limit, route="agent", tool_choice="auto"):
         conf = self.routes.get(route) or self.routes.get("planner")
         if not conf or not conf.get("supports_tools"):
             raise RuntimeError("请配置支持工具调用的 Agent 模型，并开启工具调用选项")
-        reservation = len(json.dumps([messages, tools], ensure_ascii=False).encode()) + conf["max_output"] + 512
+        reservation = self.input_reservation(messages) + len(json.dumps(tools, ensure_ascii=False).encode()) + conf["max_output"] + 512
         usage_id = reserve(self.db, "agent", topic_id, reservation, policy, task_id, task_limit)
         actual = None
         try:
@@ -379,7 +464,7 @@ class Models:
             raise RuntimeError(f"Model route {route} not configured")
         # UTF-8 byte count bounds ordinary prompt tokenization more conservatively than chars/4.
         max_output = min(conf["max_output"], output_limit) if output_limit else conf["max_output"]
-        reservation = len(json.dumps(messages, ensure_ascii=False).encode()) + max_output + 512
+        reservation = self.input_reservation(messages) + max_output + 512
         usage_id = reserve(self.db, route, topic_id, reservation, policy, task_id, task_limit)
         actual = None
         try:

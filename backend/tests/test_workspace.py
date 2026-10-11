@@ -169,7 +169,9 @@ def test_own_referenced_delete_rejected_and_snapshot_immutable(client, env):
         'modules': [draft(own, data={**own['data'], 'content': 'Changed draft'})]}).status_code == 200
     with env[1].transaction() as s:
         assert s.get(Snapshot, published).data['modules'][own['id']]['content'] == 'Original'
-        assert s.get(KV, 'control').data['active_snapshot'] == published
+        active = s.get(KV, 'control').data['active_snapshot']
+        assert active != published
+        assert s.get(Snapshot, active).data['modules'][own['id']]['content'] == 'Changed draft'
 
 
 def test_module_quota_applies_to_both_write_paths(client, env):

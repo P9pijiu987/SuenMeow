@@ -9,8 +9,8 @@ from fastapi import Depends, HTTPException
 from pydantic import ConfigDict, Field, ValidationError
 from sqlalchemy import func, select
 
-from .adapters import Discourse, LoginRequired, json_output, safe_post, timestamp
-from .database import Event, KV, Observation, Reaction, Record, Reply, Snapshot, Usage, audit, day, locked, now
+from .adapters import Discourse, LoginRequired, json_output, safe_post, timestamp, source_text
+from .database import Account, ForumIdentity, Event, KV, Observation, Reaction, Record, Reply, Snapshot, Usage, audit, day, locked, now
 from .domain import AgentPolicy, Policy, Strict
 from .service import BudgetExceeded, get_snapshot, quiet
 from .topic_pipeline import overlay, pin_valid, resolve
@@ -345,6 +345,7 @@ class InteractionEngine:
                 'allowed_reply_post_ids': reply_ids if text_ready else [],
                 'reply_inclination': ip.reply_inclination, 'max_reply_chars': min(ip.ordinary_chars, p.max_reply_chars)}
             context['allow_extended_reply'] = ip.extended_replies
+            context['automatic_memory'] = ip.automatic_memory
             from .worker import system_prompt, SYSTEM_RULES
             planning_rules = '\n'.join(snapshot['modules'][mid]['content'] for mid in snapshot['pipeline']['planner']
                                       if not snapshot['modules'][mid].get('persona') and mid not in snapshot['pipeline']['replyer'] and mid != ip.rule_module)
@@ -359,9 +360,37 @@ class InteractionEngine:
                 else: context['memory'].pop()
             messages[1]['content'] = json.dumps(context, ensure_ascii=False)
             if len(messages[1]['content'].encode()) > ip.input_bytes: raise ValueError('上下文超出输入上限，未调用模型')
+            if hasattr(w.models, 'supports_vision') and w.models.supports_vision('planner'):
+                images = await w.forum.image_parts(posts, private)
+                if images:
+                    messages[1]['content'] = [{'type': 'text', 'text': messages[1]['content']}, *images]
             raw = json_output(await w.models.complete('planner', messages, tid, p, task_id=event_id, output_limit=4000, compact_json=True))
-            if not isinstance(raw, dict) or set(raw) != {'posts', 'reply'}: raise ValueError('互动协议字段不匹配')
-            parsed = [PostDecision.model_validate(x) for x in raw['posts']]
+            if not isinstance(raw, dict) or not {'posts', 'reply'} <= set(raw) or set(raw) - {'posts', 'reply', 'memories'}:
+                raise ValueError('互动协议字段不匹配')
+            if not isinstance(raw['posts'], list) or len(raw['posts']) > 20:
+                raise ValueError('逐帖判断未完整覆盖或存在重复 ID')
+            parsed, repaired = [], 0
+            for item in raw['posts']:
+                if not isinstance(item, dict):
+                    raise ValueError('逐帖判断未完整覆盖或存在重复 ID')
+                value = dict(item)
+                pid = value.get('post_id')
+                if isinstance(pid, str) and pid.isascii() and pid.isdecimal():
+                    value['post_id'] = int(pid)
+                if type(value.get('post_id')) is not int or value['post_id'] not in source:
+                    raise ValueError('逐帖判断未完整覆盖或存在重复 ID')
+                value['reason'] = str(value.get('reason') or '模型未说明具体理由')[:300]
+                if value.get('reaction') is None: value['reaction'] = ''
+                if isinstance(value.get('score'), str):
+                    try: value['score'] = float(value['score'])
+                    except ValueError: pass
+                try:
+                    parsed.append(PostDecision.model_validate(value))
+                except ValidationError:
+                    repaired += 1
+                    parsed.append(PostDecision(post_id=value['post_id'], reason='此楼层表情字段不合法，忽略该项', reaction='', score=0))
+            if repaired:
+                with w.db.transaction() as s: audit(s, 'worker', 'interaction_items_rejected', event_id, count=repaired)
             decisions = {d.post_id: d for d in parsed}
             if len(decisions) != len(parsed) or set(decisions) != set(source): raise ValueError('逐帖判断未完整覆盖或存在重复 ID')
             for decision in parsed:
@@ -370,7 +399,11 @@ class InteractionEngine:
                 if re.search(r'自杀|自殺|轻生|輕生|自伤|自傷|性侵|强奸|強姦|去世|严重受伤|嚴重受傷', source[decision.post_id].get('text', '')):
                     decision.reaction, decision.score, decision.reason = '', 0, '敏感求助或经历，不使用表情'
             try:
-                reply = BatchReply.model_validate(raw['reply'])
+                value = dict(raw['reply']) if isinstance(raw['reply'], dict) else {}
+                value['reason'] = str(value.get('reason') or '模型未说明接话理由')[:300]
+                if isinstance(value.get('post_id'), str) and value['post_id'].isascii() and value['post_id'].isdecimal(): value['post_id'] = int(value['post_id'])
+                if value.get('text') is None: value['text'] = ''
+                reply = BatchReply.model_validate(value)
                 if bool(reply.text.strip()) != bool(reply.post_id) or reply.post_id and reply.post_id not in reply_ids: raise ValueError('模型选择了不允许的回复楼层')
                 if reply.text and (not text_ready or len(reply.text) > min(ip.ordinary_chars, p.max_reply_chars)): raise ValueError('正文不符合允许节奏或长度')
             except (ValueError, ValidationError):
@@ -380,9 +413,11 @@ class InteractionEngine:
             research = None
             from .memory_access import wants_all_memories
             explicit_memory = bool(reply.post_id and wants_all_memories(source[reply.post_id].get('text', '')))
+            from .forum_links import requested_topics
+            explicit_link = bool(reply.post_id and requested_topics(source[reply.post_id].get('text', ''), w.forum.connection['base_url']))
             extended = False
             try:
-                if reply.post_id and text_ready and ap.enabled and ((reply.research and ap.auto_research) or explicit_memory):
+                if reply.post_id and text_ready and ap.enabled and ((reply.research and ap.auto_research) or explicit_memory or explicit_link):
                     research_id, research = await w.research_event(event_id, tid, private, snapshot, p, ap,
                                                                 [source[reply.post_id]], explicit_memory=explicit_memory)
                 if explicit_memory and not research:
@@ -408,6 +443,26 @@ class InteractionEngine:
                 research_id = None
                 with w.db.transaction() as s:
                     audit(s, 'worker', 'interaction_body_failed', event_id, error=type(exc).__name__)
+            facts = []
+            if ip.automatic_memory and isinstance(raw.get('memories'), list):
+                try:
+                    refreshed = {x['id']: x for x in await w.forum.selected_posts(tid, list(source))}
+                    current_topic = await w.forum.topic(tid, 1)
+                    same_scope = private == (not await w.forum.public_visible(current_topic)) and signature(current_topic) == first.data['participants']
+                    for item in raw['memories'][:3]:
+                        if not isinstance(item, dict): continue
+                        pid, text, quote = item.get('source_post_id'), item.get('text'), item.get('quote')
+                        post = refreshed.get(pid) if type(pid) is int else None
+                        if not same_scope or not post or pid not in source or digest_post(post) != digest_post(source[pid]): continue
+                        if post.get('identity_message') or post['username'].casefold() == w.forum.connection['username'].casefold(): continue
+                        if not isinstance(text, str) or not 1 <= len(text.strip()) <= 2000 or not isinstance(quote, str) or not quote.strip(): continue
+                        if quote not in source_text(post): continue
+                        if re.search(r'密码|密碼|验证码|驗證碼|口令|api.?key|token|邮箱|電話|电话|住址|自杀|自殺|性侵|診斷|诊断|病历|病歷|账户余额|銀行|银行|身份证|身分證', text + quote, re.I): continue
+                        facts.append({'text': text.strip(), 'quote': quote, 'username': post['username'], 'forum_user_id': post.get('user_id') or 0,
+                                      'scope': 'private' if private else 'public', 'site': w.forum.connection['base_url'],
+                                      'topic_id': tid, 'source_post_id': pid, 'origin': 'interaction_fact'})
+                except Exception as exc:
+                    with w.db.transaction() as s: audit(s, 'worker', 'interaction_memory_unverified', event_id, error=type(exc).__name__)
             with w.db.transaction() as s:
                 current = locked(s, 'control').data
                 event = s.get(Event, event_id)
@@ -437,6 +492,28 @@ class InteractionEngine:
                     s.add(Reply(event_id=event.id, topic_id=tid, text_cipher=w.vault.seal(reply.text), state=state, memory_state='done', reason=reply.reason))
                 audit(s, 'worker', 'interaction_evaluated', event.id, posts=len(rows), reactions=len(selected), reply=bool(reply.text),
                       ordinary=not bool(research or extended), research=bool(research_id))
+            if facts:
+                try:
+                    with w.db.transaction() as s:
+                        current = locked(s, 'control').data
+                        event = s.get(Event, event_id)
+                        if current['epoch'] != event.epoch or current['mode'] not in ('approval', 'auto'):
+                            return
+                        locked(s, 'memory_import_lock')
+                        for fact in facts:
+                            identity = s.scalar(select(ForumIdentity).where(ForumIdentity.site == fact['site'], ForumIdentity.user_id == fact['forum_user_id']))
+                            owner = s.get(Account, identity.account_id) if identity else s.scalar(select(Account).where(Account.role == 'admin', Account.active.is_(True)))
+                            if not owner: continue
+                            existing = next((r for r in s.scalars(select(Record).where(Record.kind == 'memory', Record.owner == owner.id))
+                                             if (old := w.vault.open(r.data['cipher'])).get('text') == fact['text'] and old.get('site') == fact['site'] and old.get('scope') == fact['scope']
+                                             and (not private or old.get('topic_id') == tid)), None)
+                            if not existing:
+                                row = Record(kind='memory', owner=owner.id, title=f"{fact['username']} · 主题 {tid}", data={'cipher': w.vault.seal(fact)})
+                                s.add(row); s.flush()
+                                audit(s, 'worker', 'interaction_memory_saved', row.id, topic_id=tid, post_id=fact['source_post_id'])
+                except Exception as exc:
+                    with w.db.transaction() as s:
+                        audit(s, 'worker', 'interaction_memory_failed', event_id, error=type(exc).__name__)
         except Exception as exc:
             with w.db.transaction() as s:
                 event = s.get(Event, event_id)
@@ -444,7 +521,9 @@ class InteractionEngine:
                          '上下文超出输入上限，未调用模型', '互动协议字段不匹配', '逐帖判断未完整覆盖或存在重复 ID',
                          '扩展正文超过回复限制', '配置、水位或有效期已变化'}
                 detail = str(exc) if type(exc) is ValueError and str(exc) in known else '模型结构字段不符合协议' if isinstance(exc, ValidationError) else type(exc).__name__
-                event.state, event.reason = 'skipped', '预算不足，未评估' if isinstance(exc, BudgetExceeded) else '互动未完成：' + detail
+                event.state, event.reason = 'skipped', str(exc)[:300] if isinstance(exc, BudgetExceeded) else '互动未完成：' + detail
+                fields = [str(x['loc'][0])[:30] for x in exc.errors(include_input=False, include_url=False)] if isinstance(exc, ValidationError) else []
+                audit(s, 'worker', 'interaction_failed', event_id, error=type(exc).__name__, fields=fields)
                 for o in s.scalars(select(Observation).where(Observation.event_id == event_id)):
                     if o.state == 'processing': o.state, o.reason = 'unevaluated', event.reason
 

@@ -18,6 +18,7 @@ class InteractionPolicy(Strict):
     input_bytes: int = Field(24000, ge=4000, le=60000)
     ordinary_chars: int = Field(600, ge=100, le=2000)
     extended_replies: bool = True
+    automatic_memory: bool = True
     reply_inclination: Literal["quiet", "balanced", "chatty"] = "balanced"
     unmentioned: bool = True
     unmentioned_percent: int = Field(3, ge=0, le=100)
@@ -98,6 +99,7 @@ class Route(Strict):
     max_output: int = Field(1600, ge=100, le=8000)
     temperature: float = Field(0.7, ge=0, le=2)
     supports_tools: bool = False
+    supports_vision: bool = False
     endpoint_mode: Literal["base", "complete"] = "base"
     reasoning_effort: Literal["default", "none", "low", "medium", "high", "max"] = "default"
     @field_validator("base_url")
@@ -126,12 +128,12 @@ class ModeInput(Strict):
 class AgentPolicy(Strict):
     enabled: bool = True
     auto_research: bool = False
-    allowed_tools: list[Literal["forum_search", "forum_read_topic", "forum_user_activity", "memory_lookup", "memory_read_all", "release_describe"]] = Field(
-        default_factory=lambda: ["forum_search", "forum_read_topic", "forum_user_activity", "memory_lookup", "memory_read_all", "release_describe"])
-    max_steps: int = Field(8, ge=1, le=16)
+    allowed_tools: list[Literal["forum_search", "forum_read_topic", "forum_user_activity", "memory_lookup", "memory_read_all", "release_describe", "web_search"]] = Field(
+        default_factory=lambda: ["forum_search", "forum_read_topic", "forum_user_activity", "memory_lookup", "memory_read_all", "release_describe", "web_search"])
+    max_steps: int = Field(8, ge=1, le=32)
     max_topics: int = Field(3, ge=1, le=8)
-    max_seconds: int = Field(120, ge=20, le=300)
-    max_tokens: int = Field(16000, ge=1000, le=100000)
+    max_seconds: int = Field(120, ge=20, le=900)
+    max_tokens: int = Field(16000, ge=1000, le=1000000)
     max_chars: int = Field(8000, ge=500, le=15000)
     max_parallel: int = Field(2, ge=1, le=2)
 

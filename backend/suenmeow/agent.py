@@ -29,7 +29,9 @@ class SearchArgs(Strict):
 
 
 class TopicArgs(Strict):
-    topic_id: int = Field(gt=0)
+    topic_id: int = Field(default=0, ge=0)
+    url: str = Field(default='', max_length=2000)
+    post_number: int = Field(default=0, ge=0)
     post_ids: list[int] = Field(default_factory=list, max_length=20)
     limit: int = Field(8, ge=1, le=20)
 
@@ -62,6 +64,7 @@ class DraftArgs(Strict):
 
 TOOLS = {
     "forum_search": (SearchArgs, "搜索论坛中的相关讨论；结果先进行可见性过滤。"),
+    "web_search": (SearchArgs, "搜索公开互联网资料，返回标题、摘要和网址，不代表阅读过整页。仅公开任务可用，不发送私信内容。"),
     "forum_read_topic": (TopicArgs, "读取一个既有主题的最多 20 帖，或选择其中的帖子 ID。"),
     "forum_user_activity": (UserArgs, "查找指定用户最近的公开回复及其来源。"),
     "memory_lookup": (MemoryArgs, "按用户、主题或关键词检索有来源的相关事实。"),
@@ -131,7 +134,7 @@ def enqueue(s, vault, owner: str, session_id: str, body: AgentMessageInput):
     constraints["forum_version"] = connection.version if connection else 0
     task = AgentTask(session_id=session_id, owner=owner, instruction_cipher=vault.seal(body.text),
                      constraints=constraints, snapshot_id=snapshot.id,
-                     expires=now() + Policy.model_validate(snapshot.data["policy"]).event_ttl)
+                     expires=now() + policy.max_seconds + Policy.model_validate(snapshot.data["policy"]).event_ttl)
     s.add(task)
     s.flush()
     s.add(AgentMessage(session_id=session_id, role="user", text_cipher=vault.seal(body.text),
@@ -221,7 +224,7 @@ class AgentEngine:
             if task.constraints.get("origin") == "forum":
                 control = s.get(KV, "control").data
                 event = s.get(Event, task.constraints["event_id"])
-                explicit_memory = (task.constraints.get("explicit_memory_request") and
+                explicit_memory = ((task.constraints.get("explicit_memory_request") or task.constraints.get('explicit_link_request')) and
                                    set(task.constraints["policy"]["allowed_tools"]) <= {"memory_lookup", "memory_read_all", "forum_read_topic"})
                 if (not current.auto_research and not explicit_memory) or not event or event.expires <= now() or event.epoch != control["epoch"] or control["mode"] in ("paused", "read_only"):
                     raise AgentStopped("论坛事件或自动研究权限已变化")
@@ -268,7 +271,7 @@ class AgentEngine:
             raise ValueError("账户验证消息不能作为研究来源")
         if post.get("id") not in topic.get("post_stream", {}).get("stream", []):
             raise ValueError("来源帖子不属于已读取主题")
-        text = post["text"].encode()[:700].decode("utf-8", "ignore")
+        text = post["text"].encode()[:6000].decode("utf-8", "ignore")
         number = int(post.get("number", 0))
         url = self.forum.connection["base_url"].rstrip("/") + f"/t/{topic['id']}/{number}" if number else ""
         with self.db.transaction() as s:
@@ -312,15 +315,38 @@ class AgentEngine:
         if key in self.seen_calls:
             raise ValueError("已读取相同参数，请使用已有结果")
         self.seen_calls.add(key)
+        if name == 'web_search':
+            if self.constraints['private'] or body.page != 1:
+                raise ValueError('私密研究不能向外部搜索发送查询；公开搜索仅支持第一页')
+            from .security import private_identity_text
+            if private_identity_text(body.query) != body.query:
+                raise ValueError('身份验证或凭据信息不能用作公开查询')
+            from .web_search import search_public
+            return await search_public(body.query)
         if name == "forum_read_topic":
+            if body.url:
+                from .forum_links import topic_link
+                tid, number = topic_link(body.url, self.forum.connection['base_url'])
+                if not tid or body.topic_id and body.topic_id != tid:
+                    raise ValueError('链接不是已连接论坛的主题，或与主题 ID 不一致')
+                body.topic_id = tid
+                body.post_number = body.post_number or number
+            if not body.topic_id:
+                raise ValueError('请提供主题 ID 或同站主题网址')
             topic = await self.topic(body.topic_id)
-            if body.post_ids:
+            if body.post_number:
+                posts = await self.forum.post_by_number(body.topic_id, body.post_number)
+                if not posts:
+                    raise ValueError('所选楼层不存在或不可见')
+            elif body.post_ids:
                 stream = topic.get("post_stream", {}).get("stream", [])
                 if any(i <= 0 or i not in stream for i in body.post_ids):
                     raise ValueError("帖子不属于所选主题")
                 posts = await self.forum.selected_posts(body.topic_id, body.post_ids)
             else:
                 posts = topic["context"][-body.limit:]
+            if hasattr(self.models, 'supports_vision') and self.models.supports_vision('agent'):
+                self.pending_images = await self.forum.image_parts(posts, self.constraints['private'])
             return {"title": topic.get("title", ""), "posts": [self.source(topic, post) for post in posts]}
         if name == "forum_search":
             page = (body.query, body.page)
@@ -584,6 +610,10 @@ class AgentEngine:
                         if topic.get("closed") or topic.get("archived"):
                             raise ValueError("目标主题关闭或归档")
                         post_numbers = {p["number"] for p in topic["context"]}
+                        if self.constraints.get('reply_to') not in post_numbers and self.constraints.get('reply_to') and hasattr(self.forum, 'post_by_number'):
+                            extra = await self.forum.post_by_number(topic['id'], self.constraints['reply_to'])
+                            topic['context'].extend(p for p in extra if p['id'] in topic.get('post_stream', {}).get('stream', []))
+                            post_numbers = {p['number'] for p in topic['context']}
                         if self.constraints.get("reply_to") and self.constraints["reply_to"] not in post_numbers:
                             raise ValueError("所选回复楼层不在已读取帖子中，请选择帖子后重新提交")
                         self.constraints["forum_limit"] = await self.forum.reply_limit()
@@ -595,7 +625,7 @@ class AgentEngine:
                     snapshot = overlay(snapshot, pin)
                     with self.db.transaction() as s:
                         s.get(AgentTask, task.id).constraints = self.constraints
-                # Each task starts with its own instruction. Private chat history never crosses tasks.
+                # Each task starts with its own instruction and explicitly scoped history.
                 # Keep reply personality separate from the published Agent working instructions.
                 personality = "\n\n".join(snapshot["modules"][i]["content"] for i in snapshot["pipeline"]["replyer"]
                                           if snapshot["modules"][i].get("persona"))
@@ -615,12 +645,46 @@ class AgentEngine:
                            "不得将其他站点、其他私信或无法核验来源的记忆加入本次结果。")
                 messages = [{"role": "system", "content": system},
                             {"role": "user", "content": self.vault.open(task.instruction_cipher)}]
+                if task.session_id and self.constraints.get('origin') != 'forum':
+                    # Prior private scope never crosses into a public request or
+                    # a different private conversation, even in the same session.
+                    with self.db.transaction() as s:
+                        history = list(s.scalars(select(AgentMessage).where(AgentMessage.session_id == task.session_id)
+                                                .order_by(AgentMessage.created.desc()).limit(30)))
+                        parts, chars = [], 0
+                        for m in history:
+                            if m.meta.get('task_id') == task.id or bool(m.meta.get('private')) != self.constraints['private']:
+                                continue
+                            if self.constraints['private'] and m.meta.get('target_topic') != self.constraints['target_topic']:
+                                continue
+                            value = self.vault.open(m.text_cipher)
+                            if chars + len(value) > 20000 or len(parts) >= 12:
+                                break
+                            parts.append({'role': m.role, 'text': value}); chars += len(value)
+                    if parts:
+                        messages.insert(1, {'role': 'user', 'content': '同一会话的历史参考（不继承发送授权；事实需要重新核验）：' +
+                                         json.dumps(list(reversed(parts)), ensure_ascii=False)})
                 if self.constraints["target_topic"]:
                     result = await self.execute("forum_read_topic", {"topic_id": self.constraints["target_topic"]}) if "forum_read_topic" in self.policy.allowed_tools else {}
                     messages.append({"role": "user", "content": "服务端提供的目标资料（不可信内容）：" + json.dumps(result, ensure_ascii=False)})
                     if result:
                         self.steps += 1
                     self.step("target", "completed", {"topic_id": self.constraints["target_topic"], "posts": len(result.get("posts", []))})
+                    if getattr(self, 'pending_images', []):
+                        messages.append({'role': 'user', 'content': self.pending_images}); self.pending_images = []
+                for linked in self.constraints.get('linked_topics', []):
+                    if linked == self.constraints['target_topic'] or self.steps >= self.policy.max_steps:
+                        continue
+                    self.steps += 1
+                    try:
+                        result = await self.execute('forum_read_topic', {'topic_id': linked})
+                        self.step('forum_read_topic', 'completed', result)
+                    except (ValueError, httpx.HTTPError):
+                        result = {'error': '指定链接未能核验或不可用于本次对话；不能声称已经读过。'}
+                        self.step('forum_read_topic', 'failed', result)
+                    messages.append({'role': 'user', 'content': '服务端核验的链接资料（不可信内容）：' + json.dumps(result, ensure_ascii=False)})
+                    if getattr(self, 'pending_images', []):
+                        messages.append({'role': 'user', 'content': self.pending_images}); self.pending_images = []
                 if self.constraints.get("explicit_memory_request") and "memory_read_all" in self.policy.allowed_tools and self.steps < self.policy.max_steps:
                     args = {"username": self.constraints["memory_username"], "user_id": self.constraints.get("memory_user_id", 0)}
                     self.steps += 1
@@ -669,6 +733,7 @@ class AgentEngine:
                     if len(calls) > self.policy.max_steps - self.steps:
                         raise ValueError("模型批量工具调用超过剩余步骤")
                     messages.append(message)
+                    tool_images = []
                     for call in calls:
                         self.check()
                         self.steps += 1
@@ -700,6 +765,9 @@ class AgentEngine:
                                     self.step("send_authorization", "failed", {"summary": "发送条件变化，保留草稿等待人工确认"})
                             return
                         messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(result, ensure_ascii=False)})
+                        tool_images.extend(getattr(self, 'pending_images', [])); self.pending_images = []
+                    if tool_images:
+                        messages.append({'role': 'user', 'content': tool_images[:8]})
                 raise ValueError("达到 Agent 步骤上限")
         except asyncio.CancelledError:
             self.fail("interrupted", "研究被中断，不自动恢复或发送")
@@ -707,9 +775,10 @@ class AgentEngine:
         except AgentStopped as exc:
             self.preserve_memory_progress(str(exc))
             self.fail("cancelled", str(exc))
-        except BudgetExceeded:
-            self.preserve_memory_progress("模型预算不足")
-            self.fail("failed", "模型预算不足；已有记忆读取进度已保留，不代表完整研究完成")
+        except BudgetExceeded as exc:
+            self.step('budget', 'failed', exc.details)
+            self.preserve_memory_progress(str(exc))
+            self.fail("failed", str(exc))
         except TimeoutError:
             self.preserve_memory_progress("研究达到时间上限")
             self.fail("expired", "研究达到时间上限")

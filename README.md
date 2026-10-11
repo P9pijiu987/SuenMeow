@@ -90,3 +90,5 @@ docker compose up -d api worker gateway
 本次首帖前的工作提示词更新见 [系统工作提示词](docs/SYSTEM_PROMPTS.md)。GUI 路由编排包含可选的“主动研究工作规则”，发布后用于 Agent；空编排或旧快照使用内置有界任务规则。人格内容独立保留，工作模块不修改人格。
 
 普通用户可只读查看全部人格与全局编排，在「个人贴编排」创建本人公开个人贴的专属人格顺序，默认保存生效；管理员可开启审核。详见 [个人贴编排](docs/TOPIC_PIPELINES.md)。
+
+运行中的故障修复与预算操作见 [docs/INCIDENT_FIXES.md](docs/INCIDENT_FIXES.md)，当前交付边界见 [docs/READINESS.md](docs/READINESS.md)。

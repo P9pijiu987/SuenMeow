@@ -299,7 +299,7 @@ class Worker:
             source = int(data.get("topic_id") or 0)
             if data.get("origin") == "personal_topic" and data.get("site") != self.forum.connection["base_url"]:
                 continue
-            identity_match = data.get("origin") == "personal_topic" and data.get("forum_user_id") in (user_ids or set()) and data.get("site") == self.forum.connection["base_url"]
+            identity_match = data.get("origin") in ('personal_topic', 'interaction_fact') and data.get("forum_user_id") in (user_ids or set()) and data.get("site") == self.forum.connection["base_url"]
             if data.get("username") not in usernames and source != topic_id and not identity_match:
                 continue
             if data.get("scope") == "private" and (not private or source != topic_id):
@@ -320,13 +320,13 @@ class Worker:
                     checked[source] = False
             if not checked[source] and (not private or source != topic_id):
                 continue
-            if data.get("origin") == "personal_topic":
+            if data.get("origin") in ('personal_topic', 'interaction_fact'):
                 if data.get("site") != self.forum.connection["base_url"]:
                     continue
                 try:
                     evidence = await self.forum.selected_posts(source, [data["source_post_id"]])
                     from .adapters import source_text
-                    if not any(post.get("user_id") == data.get("forum_user_id") and not post.get("identity_message")
+                    if not data.get('quote') or not any(post.get("user_id") == data.get("forum_user_id") and not post.get("identity_message")
                                and data.get("quote", "") in source_text(post) for post in evidence):
                         continue
                 except Exception:
@@ -470,10 +470,15 @@ class Worker:
                            "max_chars": policy.max_reply_chars, "allow_send": False, "epoch": event.epoch,
                            "policy": agent_policy.model_dump(), "forum_version": connection.version if connection else 0,
                            "origin": "forum", "event_id": event_id}
-            if explicit_memory:
+            from .forum_links import requested_topics
+            linked = requested_topics(posts[-1].get('text', ''), self.forum.connection['base_url']) if posts else []
+            if linked:
+                constraints['explicit_link_request'] = True
+                constraints['linked_topics'] = linked
+            if explicit_memory or linked:
                 # Explicit memory requests can research even when unsolicited research is off.
                 # Restrict this exception to memory reads and the pinned target's context.
-                constraints["explicit_memory_request"] = True
+                constraints["explicit_memory_request"] = explicit_memory
                 constraints["memory_username"] = posts[-1]["username"]
                 constraints["memory_user_id"] = posts[-1].get("user_id", 0)
                 constraints["policy"] = {**constraints["policy"], "allowed_tools": [name for name in agent_policy.allowed_tools
