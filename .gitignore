@@ -1,21 +1,13 @@
-__pycache__/
-*.py[cod]
-.pytest_cache/
 .venv/
-.sisyphus/
-*.egg-info/
-
-# Local runtime state
-data/
-logs/
-prompts_backup/*
-!prompts_backup/.gitkeep
-
-# Local secrets
-config/credentials.toml
-config/providers.toml
-config/webui_admin_auth.toml
+__pycache__/
+.pytest_cache/
+*.pyc
 .env
-
-# Windows oddities
-NUL
+secrets/
+runtime/
+*.sqlite3
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+*.egg-info/
+.DS_Store

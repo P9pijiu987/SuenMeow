@@ -1,1 +1,0 @@
-"""SuenMeow database package."""
