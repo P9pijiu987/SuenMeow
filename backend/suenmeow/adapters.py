@@ -402,29 +402,26 @@ class Models:
                     and conf.get('model', '') in ('deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-vision-exp')))
 
     @staticmethod
-    def input_reservation(messages):
-        # Base64 bytes are not text tokens. Reserve a conservative image allowance
-        # separately, instead of charging the encoded file length as prompt text.
-        plain_messages, images = [], 0
-        for message in messages:
-            value = dict(message)
-            if isinstance(value.get('content'), list):
-                parts = []
-                for part in value['content']:
-                    if part.get('type') == 'image_url':
-                        images += 1
-                    else:
-                        parts.append(part)
-                value['content'] = parts
-            plain_messages.append(value)
-        return len(json.dumps(plain_messages, ensure_ascii=False).encode()) + images * 4096
+    def input_reservation(messages, conf=None, tools=None):
+        from .token_counting import estimate
+        return estimate(messages, conf, tools)[0]
+
+    @staticmethod
+    def rejected(exc, conf):
+        # Definite pre-inference rejections release the hold; timeouts/5xx do not.
+        return (urlsplit(conf['base_url']).hostname == 'api.deepseek.com'
+                and isinstance(exc, httpx.HTTPStatusError)
+                and exc.response.status_code in (400, 401, 403, 404, 413, 422, 429))
 
     async def tool_turn(self, messages, tools, topic_id, policy, task_id, task_limit, route="agent", tool_choice="auto"):
         conf = self.routes.get(route) or self.routes.get("planner")
         if not conf or not conf.get("supports_tools"):
             raise RuntimeError("请配置支持工具调用的 Agent 模型，并开启工具调用选项")
-        reservation = self.input_reservation(messages) + len(json.dumps(tools, ensure_ascii=False).encode()) + conf["max_output"] + 512
-        usage_id = reserve(self.db, "agent", topic_id, reservation, policy, task_id, task_limit)
+        from .token_counting import estimate, usage_metrics
+        input_tokens, metrics = estimate(messages, conf, tools)
+        metrics.update(output_limit=conf['max_output'], model=conf['model'][:100])
+        reservation = input_tokens + conf['max_output']
+        usage_id = reserve(self.db, "agent", topic_id, reservation, policy, task_id, task_limit, metrics=metrics)
         actual = None
         try:
             response = await self.client.post(self.endpoint(conf),
@@ -434,7 +431,8 @@ class Models:
                       **({"reasoning_effort": conf["reasoning_effort"]} if conf.get("reasoning_effort", "default") != "default" else {})})
             response.raise_for_status()
             data = response.json()
-            tokens = data.get("usage", {}).get("total_tokens")
+            metrics.update(usage_metrics(data.get("usage")))
+            tokens = metrics.get("total_tokens")
             if isinstance(tokens, int) and tokens >= 0:
                 actual = tokens
             choice = data["choices"][0]
@@ -446,10 +444,10 @@ class Models:
             # It remains in memory only; steps/results never store or expose it.
             if isinstance(message.get("reasoning_content"), str):
                 result["reasoning_content"] = message["reasoning_content"]
-            settle(self.db, usage_id, actual)
+            settle(self.db, usage_id, actual, metrics=metrics)
             return result, choice.get("finish_reason") == "length"
         except Exception as exc:
-            settle(self.db, usage_id, actual, failed=True)
+            settle(self.db, usage_id, actual, failed=True, metrics=metrics, rejected=self.rejected(exc, conf))
             if isinstance(exc, httpx.HTTPStatusError):
                 # Provider errors may repeat prompts or credentials; log only fixed classifications.
                 body = exc.response.text.lower()
@@ -462,10 +460,12 @@ class Models:
         conf = self.routes.get(route)
         if not conf:
             raise RuntimeError(f"Model route {route} not configured")
-        # UTF-8 byte count bounds ordinary prompt tokenization more conservatively than chars/4.
+        from .token_counting import estimate, usage_metrics
         max_output = min(conf["max_output"], output_limit) if output_limit else conf["max_output"]
-        reservation = self.input_reservation(messages) + max_output + 512
-        usage_id = reserve(self.db, route, topic_id, reservation, policy, task_id, task_limit)
+        input_tokens, metrics = estimate(messages, conf)
+        metrics.update(output_limit=max_output, model=conf['model'][:100])
+        reservation = input_tokens + max_output
+        usage_id = reserve(self.db, route, topic_id, reservation, policy, task_id, task_limit, metrics=metrics)
         actual = None
         try:
             # Only the official DeepSeek endpoint supports these provider-specific controls.
@@ -479,22 +479,49 @@ class Models:
             r.raise_for_status()
             data = r.json()
             u = data.get("usage", {})
-            if isinstance(u.get("total_tokens"), int) and u["total_tokens"] >= 0:
-                actual = u["total_tokens"]
+            metrics.update(usage_metrics(u))
+            actual = metrics.get('total_tokens')
             choice = data["choices"][0]
             if choice.get("finish_reason") == "length":
                 raise ModelOutputError("truncated", u)
             text = choice["message"]["content"]
             if not isinstance(text, str) or not text.strip():
                 raise ModelOutputError("empty", u)
-            settle(self.db, usage_id, actual)
+            settle(self.db, usage_id, actual, metrics=metrics)
             return text.strip()
-        except Exception:
-            settle(self.db, usage_id, actual, failed=True)
+        except Exception as exc:
+            settle(self.db, usage_id, actual, failed=True, metrics=metrics, rejected=self.rejected(exc, conf))
             raise
 
 
-def json_output(text: str):
+def json_output(text: str, tolerate_extra_array_close=False):
     if text.startswith("```"):
         text = "\n".join(text.splitlines()[1:-1])
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        if not tolerate_extra_array_close:
+            raise
+        # One known provider defect: an extra ] after a reply object. Remove
+        # only that unmatched delimiter, never characters inside JSON strings,
+        # never values/IDs, and require valid JSON afterwards. No model retry.
+        stack, pieces, quoted, escaped, removed = [], [], False, False, 0
+        for char in text:
+            if quoted:
+                pieces.append(char)
+                if escaped: escaped = False
+                elif char == '\\': escaped = True
+                elif char == '"': quoted = False
+                continue
+            if char == '"': quoted = True
+            elif char in '[{': stack.append(char)
+            elif char == ']' and stack and stack[-1] == '{':
+                removed += 1
+                if removed > 1: raise
+                continue
+            elif char in ']}':
+                if not stack or stack[-1] != ('[' if char == ']' else '{'): raise
+                stack.pop()
+            pieces.append(char)
+        if removed != 1 or quoted or stack: raise
+        return json.loads(''.join(pieces))

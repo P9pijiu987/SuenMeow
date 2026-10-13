@@ -92,3 +92,5 @@ docker compose up -d api worker gateway
 普通用户可只读查看全部人格与全局编排，在「个人贴编排」创建本人公开个人贴的专属人格顺序，默认保存生效；管理员可开启审核。详见 [个人贴编排](docs/TOPIC_PIPELINES.md)。
 
 运行中的故障修复与预算操作见 [docs/INCIDENT_FIXES.md](docs/INCIDENT_FIXES.md)，当前交付边界见 [docs/READINESS.md](docs/READINESS.md)。
+
+Token预留、实际用量和缓存命中说明见 [docs/TOKEN_ACCOUNTING.md](docs/TOKEN_ACCOUNTING.md)。

@@ -111,7 +111,7 @@ def quiet(policy: Policy, timestamp: float):
     return False if a == b else (a <= hour < b if a < b else hour >= a or hour < b)
 
 
-def reserve(db, route: str, topic_id: int, tokens: int, policy: Policy, task_id="", task_limit=0) -> str:
+def reserve(db, route: str, topic_id: int, tokens: int, policy: Policy, task_id="", task_limit=0, metrics=None) -> str:
     with db.transaction() as s:
         locked(s, "budget_lock")
         job = s.get(MemoryImport, task_id) if route == "memory" and task_id else None
@@ -126,7 +126,11 @@ def reserve(db, route: str, topic_id: int, tokens: int, policy: Policy, task_id=
                 raise BudgetExceeded('整帖任务已停止')
             valid_job(s, review_job)
         total = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).where(Usage.day == day()))
-        topic = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).where(Usage.day == day(), Usage.topic_id == topic_id))
+        admin_tasks = select(AgentTask.id).where(AgentTask.session_id != '',
+            func.coalesce(AgentTask.constraints['origin'].as_string(), '') != 'forum')
+        full_imports = select(MemoryImport.id).where(MemoryImport.config['full'].as_boolean().is_(True))
+        topic = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).where(Usage.day == day(), Usage.topic_id == topic_id,
+            Usage.task_id.not_in(admin_tasks), Usage.task_id.not_in(full_imports)))
         live = s.get(KV, 'budget_limits')
         limits = live.data if live else policy.model_dump()
         agent = s.get(AgentTask, task_id) if route == 'agent' and task_id else None
@@ -149,19 +153,20 @@ def reserve(db, route: str, topic_id: int, tokens: int, policy: Policy, task_id=
                 personal = s.scalar(select(func.coalesce(func.sum(Usage.tokens), 0)).join(MemoryImport, Usage.task_id == MemoryImport.id).where(MemoryImport.owner == owner.id, Usage.day == day()))
                 if personal + tokens > 20000:
                     raise BudgetExceeded("本人的每日记忆 token 额度不足")
-        u = Usage(day=day(), route=route, topic_id=topic_id, tokens=tokens, reserved=tokens, task_id=task_id)
+        u = Usage(day=day(), route=route, topic_id=topic_id, tokens=tokens, reserved=tokens, task_id=task_id, metrics=metrics or {})
         s.add(u)
         s.flush()
         return u.id
 
 
-def settle(db, usage_id: str, actual: int | None, failed=False):
+def settle(db, usage_id: str, actual: int | None, failed=False, metrics=None, rejected=False):
     with db.transaction() as s:
         u = s.get(Usage, usage_id)
         if u.state != "reserved":
             return
-        u.tokens = max(0, actual) if actual is not None else u.reserved
-        u.state = "actual" if actual is not None else ("failed_reserved" if failed else "estimated")
+        u.metrics = {**(u.metrics or {}), **(metrics or {})}
+        u.tokens = max(0, actual) if actual is not None else 0 if rejected else u.reserved
+        u.state = "actual" if actual is not None else "rejected" if rejected else ("failed_reserved" if failed else "estimated")
 
 
 class BudgetExceeded(Exception):

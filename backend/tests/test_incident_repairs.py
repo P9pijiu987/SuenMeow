@@ -183,3 +183,41 @@ async def test_one_bad_reaction_field_does_not_destroy_whole_batch(engine):
     with engine.db.transaction() as s:
         assert all(o.state=='evaluated' for o in s.scalars(select(Observation)))
         assert len(list(s.scalars(select(Reaction))))==1 and s.scalar(select(Reply))
+
+
+async def test_redundant_json_delimiter_preserves_actions_without_another_call(engine):
+    original=engine.models.complete
+    async def faulty(*args,**kwargs):
+        output=await original(*args,**kwargs)
+        return output[:-1]+']}'
+    engine.models.complete=faulty
+    await collect(engine,[post(2,raw='@cat，请解释一下这个问题。')])
+    await engine.interactions.prepare_one()
+    from suenmeow.database import Observation,Reaction
+    with engine.db.transaction() as s:
+        assert s.scalar(select(Observation)).state=='evaluated'
+        assert s.scalar(select(Reply)).state=='ready' and s.scalar(select(Reaction)).state=='ready'
+    assert len(engine.models.calls)==1 and not engine.forum.writes
+
+
+async def test_recorded_deepseek_image_response_replays_with_sourced_fact(engine):
+    # Captured fictional provider output had exactly one extra ] after reply.
+    from suenmeow.adapters import Models as RealModels
+    text='{"posts":[{"post_id":5,"reaction":"cat","score":0.6,"reason":"图片核对"}],"reply":{"post_id":5,"text":"左半邊，紅。右半邊，藍。","reason":"被点名要求描述图片并记录偏好","research":false,"long":false}],"memories":[{"source_post_id":5,"text":"长期饮品偏好是薄荷茶","quote":"我的长期饮品偏好是薄荷茶，我一直喜欢薄荷茶。"}]}'
+    requests=[]
+    def provider(request):
+        requests.append(request)
+        return httpx.Response(200,json={'usage':{'prompt_tokens':5064,'completion_tokens':187,'total_tokens':5251,'prompt_cache_hit_tokens':4864,'prompt_cache_miss_tokens':200},'choices':[{'finish_reason':'stop','message':{'content':text}}]})
+    model=RealModels(engine.db,{'planner':{'base_url':'https://api.deepseek.com','model':'deepseek-flash','api_key':'fictional-key','max_output':4000,'temperature':0}},httpx.MockTransport(provider))
+    async def image_parts(posts,private=False): return []
+    engine.forum.image_parts=image_parts;engine.forum.allowed.append('cat');engine.models=model
+    try:
+        await collect(engine,[post(5,raw='我的长期饮品偏好是薄荷茶，我一直喜欢薄荷茶。 @cat 请准确描述图片颜色。')])
+        await engine.interactions.prepare_one()
+        with engine.db.transaction() as s:
+            reply=s.scalar(select(Reply));assert reply and '紅' in engine.vault.open(reply.text_cipher)
+            fact=s.scalar(select(Record).where(Record.kind=='memory'));assert fact and engine.vault.open(fact.data['cipher'])['source_post_id']==5
+            from suenmeow.database import Usage
+            usage=s.scalar(select(Usage));assert usage.tokens==5251 and usage.metrics['cache_hit_tokens']==4864
+        assert len(requests)==1 and not engine.forum.writes
+    finally: await model.close()

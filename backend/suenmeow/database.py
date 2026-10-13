@@ -187,6 +187,7 @@ class Usage(Base):
     topic_id: Mapped[int] = mapped_column(Integer)
     tokens: Mapped[int] = mapped_column(Integer)
     reserved: Mapped[int] = mapped_column(Integer)
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
     state: Mapped[str] = mapped_column(String(32), default="reserved")
     created: Mapped[float] = mapped_column(Float, default=now)
     task_id: Mapped[str] = mapped_column(String(32), default="", index=True)
@@ -348,6 +349,9 @@ class Database:
             with self.engine.begin() as conn:
                 conn.execute(text("ALTER TABLE usage ADD COLUMN task_id VARCHAR(32) NOT NULL DEFAULT ''"))
             next(index for index in Usage.__table__.indexes if index.name == "ix_usage_task_id").create(self.engine, checkfirst=True)
+        if "metrics" not in columns:
+            with self.engine.begin() as conn:
+                conn.execute(text("ALTER TABLE usage ADD COLUMN metrics JSON NOT NULL DEFAULT '{}'"))
         with self.transaction() as s:
             if not s.get(KV, "schema"):
                 s.add(KV(key="schema", data={"version": 2}))

@@ -315,8 +315,7 @@ class InteractionEngine:
             if set(source) != {o.post_id for o in batch} or any(digest_post(source[o.post_id]) != digest_post(w.vault.open(o.data['source'])) for o in batch):
                 raise ValueError('来源已删除或修改')
             target = max(posts, key=lambda x: x['number'])
-            memories = await w.checked_memories(tid, private, {o.username for o in batch}, {o.user_id for o in batch},
-                                               query=target.get('text', '')[:1000])
+            memories = []
             with w.db.transaction() as s:
                 gate = s.get(KV, 'gate').data
             text_ready = now() - gate.get('last_send', 0) >= p.global_cooldown and now() - gate.get('topics', {}).get(str(tid), 0) >= p.topic_cooldown
@@ -333,14 +332,19 @@ class InteractionEngine:
                     if reply_allowance(s, tid, o.user_id, ip): continue
                     reply_ids.append(o.post_id)
             text_ready = text_ready and bool(reply_ids)
+            if text_ready:
+                memories = await w.checked_memories(tid, private, {o.username for o in batch}, {o.user_id for o in batch},
+                                                   query=target.get('text', '')[:1000])
             allowed = whitelist(topic) if ip.reactions else []
             def compact(post, size):
                 value = post.get('text', '')
                 body = value.encode()[:size].decode('utf-8', 'ignore')
                 return {k: post.get(k) for k in ('id', 'number', 'username', 'user_id', 'reply_to', 'reply_to_username')} | {'text': body, 'truncated': body != value}
+            background = topic['context'] if text_ready else topic['context'][:1] + topic['context'][-6:]
+            background = list({post['id']: post for post in background}.values())
             context = {'topic_id': tid, 'title': topic.get('title', '')[:200], 'private': private,
                 'new_posts': [compact(source[o.post_id], min(2400, ip.input_bytes // (len(batch) + ip.context_posts + 2))) for o in batch],
-                'context': [compact(x, 500) for x in topic['context']], 'memory': memories,
+                'context': [compact(x, 500) for x in background if x['id'] not in source], 'memory': memories,
                 'allowed_reactions': allowed, 'need_reply': text_ready,
                 'allowed_reply_post_ids': reply_ids if text_ready else [],
                 'reply_inclination': ip.reply_inclination, 'max_reply_chars': min(ip.ordinary_chars, p.max_reply_chars)}
@@ -364,7 +368,14 @@ class InteractionEngine:
                 images = await w.forum.image_parts(posts, private)
                 if images:
                     messages[1]['content'] = [{'type': 'text', 'text': messages[1]['content']}, *images]
-            raw = json_output(await w.models.complete('planner', messages, tid, p, task_id=event_id, output_limit=4000, compact_json=True))
+            output_limit = min(4000, 900 + len(batch) * 100 + (min(ip.ordinary_chars, p.max_reply_chars) if text_ready else 0) + (600 if ip.automatic_memory else 0))
+            response = await w.models.complete('planner', messages, tid, p, task_id=event_id, output_limit=output_limit, compact_json=True)
+            try:
+                raw = json_output(response)
+            except json.JSONDecodeError:
+                raw = json_output(response, tolerate_extra_array_close=True)
+                with w.db.transaction() as s:
+                    audit(s, 'worker', 'interaction_json_delimiter_normalized', event_id)
             if not isinstance(raw, dict) or not {'posts', 'reply'} <= set(raw) or set(raw) - {'posts', 'reply', 'memories'}:
                 raise ValueError('互动协议字段不匹配')
             if not isinstance(raw['posts'], list) or len(raw['posts']) > 20:

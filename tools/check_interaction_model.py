@@ -73,7 +73,15 @@ async def check():
             s.add(KV(key='connection:forum', data={'cipher': vault.seal(FictionalForum.connection)}))
         w = Worker(db, vault)
         w.forum, w.models = FictionalForum(), Models(db, {'planner': route})
+        fictional_responses = []
+        async def capture(response):
+            await response.aread()
+            data = response.json()
+            if data.get('choices'):
+                fictional_responses.append(data['choices'][0]['message'].get('content', ''))
+        w.models.client.event_hooks['response'] = [capture]
         outputs = []
+        passed = False
         try:
             await w.baseline(1)
             for tid, texts in [(900001, ['虚构验收：今天薄荷新长了叶子，好开心。', '虚构验收：@SuenMeow，种薄荷要注意什么？']),
@@ -108,8 +116,18 @@ async def check():
                 assert all(r.state == 'approval' for r in s.scalars(select(Reaction)))
                 print(json.dumps({'provider': 'api.deepseek.com', 'fictional_batches': 3, 'calls': s.scalar(select(func.count()).select_from(Usage)),
                                   'tokens': s.scalar(select(func.sum(Usage.tokens))), 'outputs': outputs,
+                                  'usage_details': [{'reserved': u.reserved, 'actual': u.tokens, 'metrics': u.metrics}
+                                                    for u in s.scalars(select(Usage).order_by(Usage.created))],
                                   'production_writes': 0, 'real_forum_reads': 0, 'forum_writes': 0}, ensure_ascii=False))
-        finally: await w.models.close(); db.engine.dispose()
+                passed = True
+        finally:
+            if not passed:
+                with db.transaction() as s:
+                    print(json.dumps({'fictional_failed_run': True, 'calls': s.scalar(select(func.count()).select_from(Usage)),
+                        'tokens': s.scalar(select(func.sum(Usage.tokens))),
+                        'usage_details': [{'reserved': u.reserved, 'actual': u.tokens, 'metrics': u.metrics} for u in s.scalars(select(Usage))],
+                        'last_fictional_response': fictional_responses[-1][:3000] if fictional_responses else ''}, ensure_ascii=False))
+            await w.models.close(); db.engine.dispose()
     production.engine.dispose()
 
 

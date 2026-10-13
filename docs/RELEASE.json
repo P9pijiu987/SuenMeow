@@ -1,7 +1,7 @@
 {
   "version": "2.0.0",
-  "status": "auto; incident repairs deployed and verified on original MacBook; cat nest off; natural conversation quality under observation",
-  "verified_at": "2026-10-11",
+  "status": "auto; offline token estimates and provider cache ledger deployed; natural conversation quality under observation",
+  "verified_at": "2026-10-13",
   "verified_features": [
     "独立 FastAPI/PostgreSQL 服务、React 中文控制台已部署到原 MacBook，公开 HTTPS 可访问",
     "真实登录、Secure/HttpOnly Cookie、CSRF 和来源拒绝、退出后会话吊销已通过检查",
@@ -31,7 +31,9 @@
     "2026-10-11: deployed and verified auto / snapshot 7 / epoch 24 / worker baseline 24; memory_read_all enabled; active modules and pipeline preserved; cat nest off. Reaction target 33%, uninvited reply sampling 3%; PostgreSQL final quota checks: 35 passed (22.96 seconds).",
     "最终分页隐私补丁 PostgreSQL 联合专项90通过（57.42秒）；续读重新核验来源可见性与原句，私密草稿不能引用其他后来变私密的来源。通过后更新API/worker，模式和快照不变。",
     "本轮已实现可保存预算、原生图片输入、公开网络搜索、审核 Agent 修订、有界会话历史、同站链接研究、在用系统提示词保存即时生效、同次调用自动有来源记忆；已更新原 MacBook，最终部署记录见 ACCEPTANCE。",
-    "2026-10-11 23:35 亚洲台北：用户明确允许更新现有服务后部署，四容器healthy、auto/快照7/epoch24、worker online/baseline24，全部生效模块与编排哈希一致、猫窝关闭、现有预算不变。HTTPS新预算鉴权/CSRF/退出及概览一致性通过，公开web_search启用、视觉路由支持确认，非请求式自动研究保持关闭；0模型调用或测试论坛写入。"
+    "2026-10-11 23:35 亚洲台北：用户明确允许更新现有服务后部署，四容器healthy、auto/快照7/epoch24、worker online/baseline24，全部生效模块与编排哈希一致、猫窝关闭、现有预算不变。HTTPS新预算鉴权/CSRF/退出及概览一致性通过，公开web_search启用、视觉路由支持确认，非请求式自动研究保持关闭；0模型调用或测试论坛写入。",
+    "2026-10-13: token预留不再把官方DeepSeek输入字节当token；离线分词器、真实输入/输出/缓存明细和未知历史、自动单帖额度隔离及特定JSON闭括号兼容已实现。当前live日额度3,000,000，单帖120,000，原人格/编排与auto保留；最终部署证据见ACCEPTANCE。",
+    "2026-10-13 16:42: 四服务healthy、auto/快照7/epoch24、水位一致，persona/编排哈希不变、猫窝关闭；live日3,000,000/单帖120,000保留。HTTPS缓存/实际预留账本及登录退出验证通过。正常运行首两笔输入11,029/命中9,216（83.6%），旧153笔未知；已保留前后备份。"
   ],
   "simulated_validation": [
     "整帖功能最终本地完整158通过/13项PostgreSQL跳过（33.73秒），MacBook完整PostgreSQL171通过（311.76秒，无跳过）；临时测试容器途中CPU调到2，正式服务限额不变。TypeScript/Vite、1280px/390px模拟GUI、一键自动Markdown下载和JSON完整文件验证通过。包括301楼/长文末尾/所有作者、逐层合并、缓存手动恢复、实际预算结算、取消/撤回/身份/CSRF/所有者/并发/过期。授权DeepSeek用4条虚构发言和原发布人格、新工作规则完成2调用/3340token协议验收，4条有效引用；生产模型任务和事实未写入，不冒充真实长帖质量验收",
@@ -45,14 +47,15 @@
     "协议2隔离样本120条有效发言选择40个表情（33.3%），不是线上成功率；普通同帖批次只调用一次planner，不调memory。GUI模拟授权名单和策略保存/未保存提示、独立表情审核在1280px/390px无水平溢出；真实发帖和React未执行。",
     "授权DeepSeek两批虚构对话修订后2调用6700token、0生产任务/论坛读取写入；低落求助温和接话、已回答问题不打扰，正文不提前承诺表情。初轮2调用6464token暴露语气与动作宣称问题，已修正规则。原七个人格未改。",
     "本轮基础 PostgreSQL 完整255通过（178.45秒）；本地完整241通过/14项数据库跳过（46.34秒）。授权 DeepSeek 三组明确虚构样本3调用15,696token，正确识别红左蓝右图片并保存带本人原句的薄荷茶偏好；0真实论坛读写，0生产任务及事实写入。最后新增修订防重发与记忆存储失败专项另记。",
-    "最终 MacBook PostgreSQL 修订/提示词/互动专项94通过（188.09秒），概览预算修正后预算/鉴权/发送安全专项33通过（91.85秒）；最终同组本地33通过（5.63秒）。最终构建 index-D6s53D4f.js；1280px/390px模拟预算保存及未批准草稿修订无横向溢出。"
+    "最终 MacBook PostgreSQL 修订/提示词/互动专项94通过（188.09秒），概览预算修正后预算/鉴权/发送安全专项33通过（91.85秒）；最终同组本地33通过（5.63秒）。最终构建 index-D6s53D4f.js；1280px/390px模拟预算保存及未批准草稿修订无横向溢出。",
+    "预算/缓存最终本地完整259通过/14数据库跳过（48.68秒），最终MacBook PostgreSQL完整273通过（187.57秒）。真实DeepSeek第二轮三组虚构样本3调用15,371token，缓存输入命中96.32%；图片响应多余括号导致该轮整体失败，修复后对捕获响应离线重放通过，未追加真实调用。初轮实际token未保存，不补造为零。"
   ],
   "pending": [
     "用户已自行启用auto；修复后的真实回复频率、表情成功比例、目标语境与研究质量仍需自然观察，不能以模拟验收代替。",
     "指定既有主题并核对正文后的单条真实发送验收",
     "真实机器人猫窝主题绑定与日记质量验收（当前未配置关闭；旧猫窝私信跟进已撤下）",
     "真实长帖模型总结与点评的内容质量、实际用量验收（功能与完整读取已部署，真实模型协议使用虚构发言验证）",
-    "新论坛用户独立TOTP设置、分层/向量记忆与矛盾合并、费用预估/分项账单、跨任务摘要缓存、批量表情审核尚未实现；详见READINESS.md"
+    "新论坛用户独立TOTP设置、分层/向量记忆与矛盾合并、货币费用预估/账单、跨任务摘要缓存、批量表情审核尚未实现；详见READINESS.md"
   ],
   "instruction": "分别说明真实运行证据、模拟测试和待验收项目。没有旧记忆不等于具备关于用户的事实；禁止把计划写成已上线。"
 }

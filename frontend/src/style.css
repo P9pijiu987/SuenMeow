@@ -180,3 +180,5 @@ fieldset { padding: 0; margin: 0; border: 0; min-width: 0; }
 .topic-reader a { color:var(--green); text-underline-offset:3px; }
 .sidebar nav { min-height:0; overflow-y:auto; }
 .sidebar-bottom { flex-shrink:0; }
+
+.usage-detail{display:block;margin-top:5px;color:var(--muted);white-space:normal}

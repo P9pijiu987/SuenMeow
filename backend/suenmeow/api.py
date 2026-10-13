@@ -546,11 +546,25 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
             return [{"id": a.id, "actor": a.actor, "action": a.action, "target": a.target,
                      "detail": a.detail, "created": a.created} for a in s.scalars(select(Audit).order_by(Audit.id.desc()).limit(200))]
 
+    @app.get('/api/usage/summary')
+    def usage_summary(account=Depends(admin)):
+        from .database import day
+        with db.transaction() as s:
+            rows = list(s.scalars(select(Usage).where(Usage.day == day())))
+            measured = [u for u in rows if 'prompt_tokens' in (u.metrics or {}) and 'cache_hit_tokens' in (u.metrics or {})]
+            inputs = sum(u.metrics['prompt_tokens'] for u in measured)
+            hits = sum(u.metrics['cache_hit_tokens'] for u in measured)
+            return {'day': day(), 'calls': len(rows), 'cache_measured_calls': len(measured),
+                    'cache_unknown_calls': len(rows) - len(measured), 'cache_hit_tokens': hits,
+                    'measured_input_tokens': inputs, 'cache_hit_percent': round(100 * hits / inputs, 1) if inputs else None,
+                    'actual_tokens': sum(u.tokens for u in rows if u.state == 'actual'),
+                    'held_tokens': sum(u.tokens for u in rows if u.state != 'actual')}
+
     @app.get("/api/usage")
     def usage(account=Depends(admin)):
         with db.transaction() as s:
             return [{"id": u.id, "day": u.day, "route": u.route, "topic_id": u.topic_id,
-                     "tokens": u.tokens, "state": u.state, "created": u.created}
+                     "tokens": u.tokens, "reserved": u.reserved, "metrics": u.metrics or {}, "state": u.state, "created": u.created}
                     for u in s.scalars(select(Usage).order_by(Usage.created.desc()).limit(200))]
 
     mount_agent_api(app, db, vault, admin)
